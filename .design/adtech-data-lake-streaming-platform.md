@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-A data lake streaming platform for adtech that consumes OpenRTB-formatted bid request/response events from Apache Kafka and writes them into Apache Iceberg tables backed by object storage. The system runs locally via Docker Compose and is designed for straightforward expansion to AWS (S3 + EMR/EKS) or GCP (GCS + Dataproc/GKE).
+A data lake streaming platform for adtech that produces a full OpenRTB 2.6 event funnel (bid requests, bid responses, impressions, clicks) to Apache Kafka, streams them through Apache Flink, and stores them in Apache Iceberg tables backed by MinIO (S3-compatible) object storage. Includes Trino as the SQL query engine, CloudBeaver as a web-based SQL IDE, and Apache Superset for dashboards and visualization. The system runs locally via Docker Compose and is designed for straightforward expansion to AWS (S3 + EMR/EKS) or GCP (GCS + Dataproc/GKE).
 
 ## 2. Goals
 
