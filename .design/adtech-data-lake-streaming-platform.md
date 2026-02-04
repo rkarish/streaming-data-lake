@@ -647,7 +647,230 @@ Add 3 new datasets for the new tables:
 | `docker-compose.yml` | Add 3 new topic env vars to `mock-data-gen` |
 | `README.md` | Document new topics, tables, funnel queries |
 
-### Phase 6: Cloud Readiness
+### Phase 6: Stream Transformations & Aggregations
+
+Extend the Flink pipeline beyond simple pass-through ingestion to demonstrate real-time stream processing capabilities: field transformations, enrichment, filtering, and streaming aggregations written directly to Iceberg tables.
+
+#### 6.1 Motivation
+
+The current pipeline performs minimal transformation (JSON parsing + field extraction). Real-world ad-tech pipelines typically require:
+
+- **Data enrichment**: Lookup tables for geo-IP enrichment, device classification, IAB category expansion
+- **Field normalization**: Currency conversion, timestamp normalization, URL parsing
+- **Filtering**: Remove invalid/test traffic, filter by geo or device type
+- **Real-time aggregations**: Pre-computed metrics for dashboards (CPM by geo, fill rate by publisher, hourly impression counts)
+
+#### 6.2 Stream Transformation Use Cases
+
+##### 6.2.1 Bid Floor Currency Normalization
+
+Convert all bid floors to a common currency (USD) using a static exchange rate table.
+
+**Flink SQL:**
+```sql
+-- Create a lookup table for exchange rates
+CREATE TABLE currency_rates (
+  currency_code STRING,
+  usd_rate DOUBLE,
+  PRIMARY KEY (currency_code) NOT ENFORCED
+) WITH (
+  'connector' = 'jdbc',
+  'url' = 'jdbc:postgresql://...',
+  'table-name' = 'currency_rates'
+);
+
+-- Transform bid requests with normalized bid floor
+INSERT INTO iceberg_catalog.db.bid_requests_normalized
+SELECT
+  request_id,
+  imp_id,
+  imp_bidfloor * COALESCE(cr.usd_rate, 1.0) AS imp_bidfloor_usd,
+  ...
+FROM kafka_bid_requests br
+LEFT JOIN currency_rates FOR SYSTEM_TIME AS OF br.proc_time AS cr
+  ON br.imp_bidfloorcur = cr.currency_code;
+```
+
+##### 6.2.2 Geo Enrichment
+
+Enrich bid requests with additional geo metadata (city, DMA, timezone) from IP address.
+
+**Options:**
+- **MaxMind GeoIP2**: Load GeoLite2 database as a Flink lookup table or UDF
+- **External service**: Async I/O to a geo-IP service (adds latency)
+- **Pre-computed table**: Join on IP prefix ranges
+
+##### 6.2.3 Device Classification
+
+Classify devices into categories (mobile web, mobile app, desktop, CTV) based on user agent and device type.
+
+**Flink SQL:**
+```sql
+INSERT INTO iceberg_catalog.db.bid_requests_enriched
+SELECT
+  *,
+  CASE
+    WHEN device_type = 7 THEN 'CTV'
+    WHEN device_type IN (1, 4) AND site_id IS NOT NULL THEN 'Mobile Web'
+    WHEN device_type IN (1, 4) AND app_id IS NOT NULL THEN 'Mobile App'
+    WHEN device_type = 2 THEN 'Desktop'
+    ELSE 'Unknown'
+  END AS device_category
+FROM kafka_bid_requests;
+```
+
+##### 6.2.4 Traffic Filtering
+
+Filter out invalid or test traffic before writing to Iceberg.
+
+**Flink SQL:**
+```sql
+-- Only write production traffic (exclude test publishers and invalid IPs)
+INSERT INTO iceberg_catalog.db.bid_requests
+SELECT * FROM kafka_bid_requests
+WHERE
+  publisher_id NOT LIKE 'test-%'
+  AND device_ip NOT LIKE '10.%'
+  AND device_ip NOT LIKE '192.168.%'
+  AND imp_bidfloor > 0;
+```
+
+#### 6.3 Streaming Aggregations to Iceberg
+
+Flink supports writing aggregated results directly to Iceberg tables using **upsert mode** (requires a primary key). This enables real-time materialized views for dashboards.
+
+##### 6.3.1 Iceberg Upsert Mode Requirements
+
+- Iceberg table must have a **primary key** defined (via `identifier-field-ids` in table properties)
+- Flink Iceberg sink must be configured with `upsert-enabled = true`
+- Flink uses **equality delete files** to handle updates (merge-on-read)
+
+**Iceberg Table with Primary Key:**
+```sql
+CREATE TABLE iceberg_catalog.db.hourly_impressions_by_geo (
+  window_start TIMESTAMP(3),
+  device_geo_country STRING,
+  impression_count BIGINT,
+  total_revenue DOUBLE,
+  avg_win_price DOUBLE,
+  PRIMARY KEY (window_start, device_geo_country) NOT ENFORCED
+) WITH (
+  'format-version' = '2',
+  'write.upsert.enabled' = 'true'
+);
+```
+
+##### 6.3.2 Tumbling Window Aggregation
+
+Compute hourly metrics by country and write directly to Iceberg.
+
+**Flink SQL:**
+```sql
+INSERT INTO iceberg_catalog.db.hourly_impressions_by_geo
+SELECT
+  TUMBLE_START(event_timestamp, INTERVAL '1' HOUR) AS window_start,
+  device_geo_country,
+  COUNT(*) AS impression_count,
+  SUM(win_price) AS total_revenue,
+  AVG(win_price) AS avg_win_price
+FROM kafka_impressions
+GROUP BY
+  TUMBLE(event_timestamp, INTERVAL '1' HOUR),
+  device_geo_country;
+```
+
+##### 6.3.3 Sliding Window for Real-Time Dashboards
+
+Compute rolling 5-minute metrics updated every minute for near-real-time dashboards.
+
+**Flink SQL:**
+```sql
+INSERT INTO iceberg_catalog.db.rolling_metrics_by_bidder
+SELECT
+  HOP_START(event_timestamp, INTERVAL '1' MINUTE, INTERVAL '5' MINUTE) AS window_start,
+  HOP_END(event_timestamp, INTERVAL '1' MINUTE, INTERVAL '5' MINUTE) AS window_end,
+  bidder_id,
+  COUNT(*) AS win_count,
+  SUM(win_price) AS revenue,
+  AVG(win_price) AS avg_cpm
+FROM kafka_impressions
+GROUP BY
+  HOP(event_timestamp, INTERVAL '1' MINUTE, INTERVAL '5' MINUTE),
+  bidder_id;
+```
+
+##### 6.3.4 Funnel Metrics Aggregation
+
+Pre-compute funnel conversion rates by publisher for dashboard queries.
+
+**Flink SQL (using interval joins):**
+```sql
+-- Join bid requests with responses within a time window
+INSERT INTO iceberg_catalog.db.hourly_funnel_by_publisher
+SELECT
+  TUMBLE_START(br.event_timestamp, INTERVAL '1' HOUR) AS window_start,
+  br.publisher_id,
+  COUNT(DISTINCT br.request_id) AS bid_requests,
+  COUNT(DISTINCT resp.response_id) AS bid_responses,
+  COUNT(DISTINCT imp.impression_id) AS impressions,
+  COUNT(DISTINCT cl.click_id) AS clicks,
+  CAST(COUNT(DISTINCT resp.response_id) AS DOUBLE) / NULLIF(COUNT(DISTINCT br.request_id), 0) AS fill_rate,
+  CAST(COUNT(DISTINCT imp.impression_id) AS DOUBLE) / NULLIF(COUNT(DISTINCT resp.response_id), 0) AS win_rate,
+  CAST(COUNT(DISTINCT cl.click_id) AS DOUBLE) / NULLIF(COUNT(DISTINCT imp.impression_id), 0) AS ctr
+FROM kafka_bid_requests br
+LEFT JOIN kafka_bid_responses resp
+  ON br.request_id = resp.request_id
+  AND resp.event_timestamp BETWEEN br.event_timestamp AND br.event_timestamp + INTERVAL '5' SECOND
+LEFT JOIN kafka_impressions imp
+  ON resp.response_id = imp.response_id
+  AND imp.event_timestamp BETWEEN resp.event_timestamp AND resp.event_timestamp + INTERVAL '10' SECOND
+LEFT JOIN kafka_clicks cl
+  ON imp.impression_id = cl.impression_id
+  AND cl.event_timestamp BETWEEN imp.event_timestamp AND imp.event_timestamp + INTERVAL '60' SECOND
+GROUP BY
+  TUMBLE(br.event_timestamp, INTERVAL '1' HOUR),
+  br.publisher_id;
+```
+
+#### 6.4 Mock Data Enhancements
+
+To exercise the transformation and aggregation features, enhance the mock data generator:
+
+| Enhancement | Purpose |
+|---|---|
+| Add `bidfloorcur` variation | Generate EUR, GBP, JPY bid floors (10% of requests) to test currency normalization |
+| Add `app` object | Generate app traffic (30% of requests) alongside site traffic for device classification |
+| Add test publisher IDs | Generate `test-*` publisher IDs (5% of requests) to test traffic filtering |
+| Add invalid IPs | Generate RFC1918 private IPs (2% of requests) to test IP filtering |
+
+#### 6.5 New Iceberg Tables
+
+| Table | Type | Purpose |
+|---|---|---|
+| `bid_requests_enriched` | Append | Bid requests with device classification |
+| `hourly_impressions_by_geo` | Upsert | Hourly impression metrics by country |
+| `rolling_metrics_by_bidder` | Upsert | 5-minute rolling metrics by bidder |
+| `hourly_funnel_by_publisher` | Upsert | Hourly funnel conversion rates by publisher |
+
+#### 6.6 Considerations & Limitations
+
+- **Upsert overhead**: Equality deletes create merge-on-read overhead; run compaction frequently on aggregate tables
+- **Late data**: Configure allowed lateness for windows; late arrivals may be dropped or sent to a side output
+- **State size**: Interval joins and large windows accumulate state; configure state TTL and checkpointing appropriately
+- **Iceberg format version**: Upsert mode requires Iceberg format v2 (supports row-level deletes)
+
+#### 6.7 Modified Files Summary
+
+| File | Changes |
+|---|---|
+| `mock-data-gen/src/schemas.py` | Add currency variation, app object, test traffic flags |
+| `mock-data-gen/src/config.py` | Add config for test/invalid traffic rates |
+| `streaming/flink/sql/create_tables.sql` | Add enriched source tables and aggregate sink tables |
+| `streaming/flink/sql/aggregation_jobs.sql` | New file: streaming aggregation INSERT statements |
+| `scripts/setup.sh` | Create new Iceberg aggregate tables |
+| `superset/setup-dashboards.py` | Add charts for real-time aggregate tables |
+
+### Phase 7: Cloud Readiness
 - Parameterize storage and catalog configs for AWS/GCP
 - Document deployment steps for each cloud
 - CI/CD pipeline for streaming job deployment
