@@ -101,7 +101,60 @@ bid_requests (
 PARTITIONED BY (days(event_timestamp), device_geo_country)
 ```
 
-Similar flattened schemas will be created for `bid_responses`, `impressions`, and `clicks`.
+### 3.4 Iceberg Table Schema (bid_responses)
+
+```
+bid_responses (
+  response_id        STRING,
+  request_id         STRING,      -- FK to bid_requests.request_id
+  imp_id             STRING,
+  bidder_id          STRING,      -- seat ID
+  bid_price          DOUBLE,
+  bid_currency       STRING,
+  ad_domain          STRING,      -- advertiser domain
+  creative_id        STRING,
+  deal_id            STRING,      -- PMP deal ID (nullable)
+  event_timestamp    TIMESTAMP,
+  received_at        TIMESTAMP
+)
+PARTITIONED BY (days(event_timestamp))
+```
+
+### 3.5 Iceberg Table Schema (impressions)
+
+```
+impressions (
+  impression_id      STRING,
+  request_id         STRING,      -- FK to bid_requests.request_id
+  response_id        STRING,      -- FK to bid_responses.response_id
+  imp_id             STRING,
+  bidder_id          STRING,
+  win_price          DOUBLE,      -- clearing price
+  win_currency       STRING,
+  creative_id        STRING,
+  ad_domain          STRING,
+  event_timestamp    TIMESTAMP,
+  received_at        TIMESTAMP
+)
+PARTITIONED BY (days(event_timestamp))
+```
+
+### 3.6 Iceberg Table Schema (clicks)
+
+```
+clicks (
+  click_id           STRING,
+  request_id         STRING,      -- FK to bid_requests.request_id
+  impression_id      STRING,      -- FK to impressions.impression_id
+  imp_id             STRING,
+  bidder_id          STRING,
+  creative_id        STRING,
+  click_url          STRING,
+  event_timestamp    TIMESTAMP,
+  received_at        TIMESTAMP
+)
+PARTITIONED BY (days(event_timestamp))
+```
 
 ## 4. Streaming Engine Options
 
@@ -469,7 +522,132 @@ streaming-data-lake/
 | `cloudbeaver` | `dbeaver/cloudbeaver` | 8978 | Web SQL IDE for Trino |
 | `superset` | `apache/superset` | 8088 | Dashboards & visualization |
 
-### Phase 5: Cloud Readiness
+### Phase 5: Full OpenRTB Funnel (bid-responses, impressions, clicks)
+
+Extend the platform from a single `bid-requests` topic to the full AdTech event funnel. All downstream events are correlated to bid requests via `request_id`, enabling funnel analytics (fill rate, win rate, CTR) through Trino joins.
+
+#### 5.1 Event Funnel & Correlation
+
+```
+bid-request  -->  bid-response  -->  impression  -->  click
+  (100%)           (~60%)             (~15%)          (~2%)
+```
+
+Each event carries `request_id` (and `imp_id`) from the originating bid request. The generator produces correlated events: for each bid request, it probabilistically generates a bid response, then an impression (win notice), then a click, reusing IDs from the parent event.
+
+#### 5.2 New Kafka Topics
+
+| Topic | Description |
+|---|---|
+| `bid-responses` | OpenRTB 2.6 BidResponse objects (correlated to bid-requests via `request_id`) |
+| `impressions` | Win notice / impression tracking events (correlated via `request_id`, `response_id`) |
+| `clicks` | Click tracking events (correlated via `request_id`, `imp_id`) |
+
+#### 5.3 Mock Data Generator Changes
+
+**`config.py`** -- new environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `TOPIC_BID_RESPONSES` | `bid-responses` | Kafka topic for bid responses |
+| `TOPIC_IMPRESSIONS` | `impressions` | Kafka topic for impressions |
+| `TOPIC_CLICKS` | `clicks` | Kafka topic for clicks |
+| `BID_RESPONSE_RATE` | `0.60` | Probability a bid request gets a response |
+| `WIN_RATE` | `0.15` | Probability a bid response wins (impression) |
+| `CLICK_RATE` | `0.02` | Probability an impression gets clicked |
+
+**`schemas.py`** -- new generator functions:
+
+- `generate_bid_response(bid_request)` -- takes the parent bid request, reuses `request_id`, `imp_id`, generates bidder/price/creative fields
+- `generate_impression(bid_request, bid_response)` -- takes parent request and response, reuses IDs, sets win price (typically <= bid price)
+- `generate_click(bid_request, impression)` -- takes parent request and impression, reuses IDs, generates click URL
+
+All timestamps are slightly after their parent event's timestamp to maintain realistic ordering.
+
+**`generator.py`** -- funnel logic in the main loop:
+
+```
+for each tick:
+    bid_request = generate_bid_request()
+    produce(bid-requests, bid_request)
+
+    if random() < BID_RESPONSE_RATE:
+        bid_response = generate_bid_response(bid_request)
+        produce(bid-responses, bid_response)
+
+        if random() < WIN_RATE:
+            impression = generate_impression(bid_request, bid_response)
+            produce(impressions, impression)
+
+            if random() < CLICK_RATE:
+                click = generate_click(bid_request, impression)
+                produce(clicks, click)
+```
+
+#### 5.4 Flink SQL Changes
+
+**`create_tables.sql`** -- add 3 new Kafka source table DDLs:
+
+- `kafka_bid_responses` -- maps the bid response JSON structure
+- `kafka_impressions` -- maps the impression JSON structure
+- `kafka_clicks` -- maps the click JSON structure
+
+Each source table uses the same Kafka connector config pattern as `kafka_bid_requests` with the appropriate topic name and consumer group.
+
+**`insert_jobs.sql`** -- use `STATEMENT SET` to run all 4 inserts in a single Flink job:
+
+```sql
+EXECUTE STATEMENT SET
+BEGIN
+  INSERT INTO iceberg_catalog.db.bid_requests SELECT ... FROM kafka_bid_requests;
+  INSERT INTO iceberg_catalog.db.bid_responses SELECT ... FROM kafka_bid_responses;
+  INSERT INTO iceberg_catalog.db.impressions SELECT ... FROM kafka_impressions;
+  INSERT INTO iceberg_catalog.db.clicks SELECT ... FROM kafka_clicks;
+END;
+```
+
+This is more efficient than submitting 4 separate jobs since they share the Flink runtime and checkpointing.
+
+#### 5.5 Setup Script Changes (`setup.sh`)
+
+- **Kafka topics**: Create `bid-responses`, `impressions`, `clicks` topics (3 partitions each)
+- **Iceberg tables**: Create `db.bid_responses`, `db.impressions`, `db.clicks` tables via REST API with the schemas defined above
+- **Trino verification**: Verify all 4 tables are visible via `SHOW TABLES`
+
+#### 5.6 Query Examples (`query-examples.sh`)
+
+Add funnel analytics queries that join across the tables:
+
+- **Fill rate by country**: `bid_responses / bid_requests` grouped by `device_geo_country`
+- **Win rate by bidder**: `impressions / bid_responses` grouped by `bidder_id`
+- **CTR by creative**: `clicks / impressions` grouped by `creative_id`
+- **Revenue by publisher**: `SUM(win_price)` from impressions joined to bid_requests grouped by `publisher_id`
+- **Full funnel**: request -> response -> impression -> click counts in a single query
+- **Average bid-to-win spread**: `AVG(bid_price - win_price)` from responses joined to impressions
+
+#### 5.7 Superset Changes (`setup-dashboards.py`)
+
+Add 3 new datasets for the new tables:
+- `bid_responses` dataset
+- `impressions` dataset
+- `clicks` dataset
+
+#### 5.8 Modified Files Summary
+
+| File | Changes |
+|---|---|
+| `mock-data-gen/src/config.py` | Add 3 topic names + 3 funnel rate env vars |
+| `mock-data-gen/src/schemas.py` | Add `generate_bid_response()`, `generate_impression()`, `generate_click()` |
+| `mock-data-gen/src/generator.py` | Funnel logic: produce to all 4 topics with correlated events |
+| `streaming/flink/sql/create_tables.sql` | Add 3 Kafka source table DDLs |
+| `streaming/flink/sql/insert_jobs.sql` | Convert to `STATEMENT SET` with 4 INSERT statements |
+| `scripts/setup.sh` | Create 3 new Kafka topics + 3 new Iceberg tables |
+| `scripts/query-examples.sh` | Add funnel join queries |
+| `superset/setup-dashboards.py` | Add 3 new datasets |
+| `docker-compose.yml` | Add 3 new topic env vars to `mock-data-gen` |
+| `README.md` | Document new topics, tables, funnel queries |
+
+### Phase 6: Cloud Readiness
 - Parameterize storage and catalog configs for AWS/GCP
 - Document deployment steps for each cloud
 - CI/CD pipeline for streaming job deployment

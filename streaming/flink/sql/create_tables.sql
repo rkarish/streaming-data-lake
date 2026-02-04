@@ -68,3 +68,79 @@ CREATE TEMPORARY TABLE kafka_bid_requests (
     'json.fail-on-missing-field' = 'false',
     'json.ignore-parse-errors' = 'true'
 );
+
+-- 3. Kafka source table for bid_responses (OpenRTB 2.6 JSON)
+CREATE TEMPORARY TABLE kafka_bid_responses (
+    `id` STRING,
+    `seatbid` ARRAY<ROW<
+        `seat` STRING,
+        `bid` ARRAY<ROW<
+            `id` STRING,
+            `impid` STRING,
+            `price` DOUBLE,
+            `adid` STRING,
+            `crid` STRING,
+            `adomain` ARRAY<STRING>,
+            `dealid` STRING,
+            `w` INT,
+            `h` INT
+        >>
+    >>,
+    `bidid` STRING,
+    `cur` STRING,
+    `ext` ROW<`request_id` STRING>,
+    `event_timestamp` STRING
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'bid-responses',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.group.id' = 'flink-bid-responses',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'json',
+    'json.fail-on-missing-field' = 'false',
+    'json.ignore-parse-errors' = 'true'
+);
+
+-- 4. Kafka source table for impressions (flat JSON)
+CREATE TEMPORARY TABLE kafka_impressions (
+    `impression_id` STRING,
+    `request_id` STRING,
+    `response_id` STRING,
+    `imp_id` STRING,
+    `bidder_id` STRING,
+    `win_price` DOUBLE,
+    `win_currency` STRING,
+    `creative_id` STRING,
+    `ad_domain` STRING,
+    `event_timestamp` STRING
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'impressions',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.group.id' = 'flink-impressions',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'json',
+    'json.fail-on-missing-field' = 'false',
+    'json.ignore-parse-errors' = 'true'
+);
+
+-- 5. Kafka source table for clicks (flat JSON)
+CREATE TEMPORARY TABLE kafka_clicks (
+    `click_id` STRING,
+    `request_id` STRING,
+    `impression_id` STRING,
+    `imp_id` STRING,
+    `bidder_id` STRING,
+    `creative_id` STRING,
+    `click_url` STRING,
+    `event_timestamp` STRING
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'clicks',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.group.id' = 'flink-clicks',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'json',
+    'json.fail-on-missing-field' = 'false',
+    'json.ignore-parse-errors' = 'true'
+);

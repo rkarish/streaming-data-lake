@@ -1,11 +1,17 @@
 import json
 import logging
+import random
 import time
 
 from kafka import KafkaProducer
 
 from src.config import config
-from src.schemas import generate_bid_request
+from src.schemas import (
+    generate_bid_request,
+    generate_bid_response,
+    generate_click,
+    generate_impression,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,19 +59,21 @@ def create_producer() -> KafkaProducer:
 
 
 def main() -> None:
-    """Main producer loop with rate-limited event generation."""
+    """Main producer loop with rate-limited funnel event generation."""
     producer = create_producer()
-    topic = config.topic_bid_requests
     eps = config.events_per_second
     interval = 1.0 / eps
 
     logger.info(
-        "Starting bid request generator: %d events/sec to topic '%s'",
+        "Starting funnel generator: %d bid-requests/sec "
+        "(response_rate=%.2f, win_rate=%.2f, click_rate=%.2f)",
         eps,
-        topic,
+        config.bid_response_rate,
+        config.win_rate,
+        config.click_rate,
     )
 
-    count = 0
+    counts = {"bid_requests": 0, "bid_responses": 0, "impressions": 0, "clicks": 0}
     try:
         next_send = time.monotonic()
         while True:
@@ -73,17 +81,62 @@ def main() -> None:
             if now < next_send:
                 time.sleep(next_send - now)
 
-            event = generate_bid_request()
-            producer.send(topic, key=event["id"], value=event)
-            count += 1
+            bid_request = generate_bid_request()
+            producer.send(
+                config.topic_bid_requests,
+                key=bid_request["id"],
+                value=bid_request,
+            )
+            counts["bid_requests"] += 1
 
-            if count % 100 == 0:
+            if random.random() < config.bid_response_rate:
+                bid_response = generate_bid_response(bid_request)
+                producer.send(
+                    config.topic_bid_responses,
+                    key=bid_response["id"],
+                    value=bid_response,
+                )
+                counts["bid_responses"] += 1
+
+                if random.random() < config.win_rate:
+                    impression = generate_impression(bid_request, bid_response)
+                    producer.send(
+                        config.topic_impressions,
+                        key=impression["impression_id"],
+                        value=impression,
+                    )
+                    counts["impressions"] += 1
+
+                    if random.random() < config.click_rate:
+                        click = generate_click(bid_request, impression)
+                        producer.send(
+                            config.topic_clicks,
+                            key=click["click_id"],
+                            value=click,
+                        )
+                        counts["clicks"] += 1
+
+            total = counts["bid_requests"]
+            if total % 100 == 0:
                 producer.flush()
-                logger.info("Produced %d bid requests", count)
+                logger.info(
+                    "Produced: %d requests, %d responses, %d impressions, %d clicks",
+                    counts["bid_requests"],
+                    counts["bid_responses"],
+                    counts["impressions"],
+                    counts["clicks"],
+                )
 
             next_send += interval
     except KeyboardInterrupt:
-        logger.info("Shutting down. Produced %d bid requests total.", count)
+        logger.info(
+            "Shutting down. Totals: %d requests, %d responses, "
+            "%d impressions, %d clicks",
+            counts["bid_requests"],
+            counts["bid_responses"],
+            counts["impressions"],
+            counts["clicks"],
+        )
     finally:
         producer.flush()
         producer.close()

@@ -5,9 +5,9 @@ set -euo pipefail
 # AdTech Data Lake Streaming Platform - Setup
 # =============================================================================
 # Run this script AFTER `docker compose up -d` to initialize:
-#   1. Kafka topic (bid-requests)
+#   1. Kafka topics (bid-requests, bid-responses, impressions, clicks)
 #   2. MinIO bucket (warehouse)
-#   3. Iceberg namespace and table (db.bid_requests)
+#   3. Iceberg namespace and tables (db.bid_requests, bid_responses, impressions, clicks)
 #   4. Flink streaming job (Kafka -> Iceberg)
 #   5. Trino connectivity verification
 #   6. CloudBeaver readiness check
@@ -17,19 +17,19 @@ set -euo pipefail
 ICEBERG_REST_URL="http://localhost:8181"
 
 # -----------------------------------------------------------------------------
-# Task 1: Create Kafka topic
+# Task 1: Create Kafka topics
 # -----------------------------------------------------------------------------
-echo "==> Creating Kafka topic 'bid-requests' (3 partitions, replication-factor 1)..."
-
-docker exec kafka /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 \
-  --create \
-  --topic bid-requests \
-  --partitions 3 \
-  --replication-factor 1 \
-  --if-not-exists
-
-echo "    Kafka topic 'bid-requests' is ready."
+for topic in bid-requests bid-responses impressions clicks; do
+  echo "==> Creating Kafka topic '${topic}' (3 partitions, replication-factor 1)..."
+  docker exec kafka /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server localhost:9092 \
+    --create \
+    --topic "${topic}" \
+    --partitions 3 \
+    --replication-factor 1 \
+    --if-not-exists
+  echo "    Kafka topic '${topic}' is ready."
+done
 
 # -----------------------------------------------------------------------------
 # Task 2: Create MinIO bucket
@@ -123,6 +123,137 @@ else
   exit 1
 fi
 
+# -- 3c: Create table 'bid_responses' --
+echo "==> Creating Iceberg table 'db.bid_responses'..."
+
+bid_responses_payload='{
+  "name": "bid_responses",
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {"id": 1, "name": "response_id", "type": "string", "required": false},
+      {"id": 2, "name": "request_id", "type": "string", "required": false},
+      {"id": 3, "name": "seat", "type": "string", "required": false},
+      {"id": 4, "name": "bid_id", "type": "string", "required": false},
+      {"id": 5, "name": "imp_id", "type": "string", "required": false},
+      {"id": 6, "name": "bid_price", "type": "double", "required": false},
+      {"id": 7, "name": "creative_id", "type": "string", "required": false},
+      {"id": 8, "name": "deal_id", "type": "string", "required": false},
+      {"id": 9, "name": "ad_domain", "type": "string", "required": false},
+      {"id": 10, "name": "currency", "type": "string", "required": false},
+      {"id": 11, "name": "event_timestamp", "type": "timestamptz", "required": false}
+    ]
+  },
+  "partition-spec": {
+    "spec-id": 0,
+    "fields": [
+      {"source-id": 11, "transform": "day", "name": "event_timestamp_day", "field-id": 1000}
+    ]
+  },
+  "write-order": {"order-id": 0, "fields": []},
+  "properties": {"format-version": "2"}
+}'
+
+br_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "${ICEBERG_REST_URL}/v1/namespaces/db/tables" \
+  -H "Content-Type: application/json" \
+  -d "${bid_responses_payload}")
+
+if [ "$br_http_code" -eq 200 ]; then
+  echo "    Table 'db.bid_responses' created successfully."
+elif [ "$br_http_code" -eq 409 ]; then
+  echo "    Table 'db.bid_responses' already exists, skipping."
+else
+  echo "    ERROR: Failed to create table 'db.bid_responses' (HTTP ${br_http_code})."
+  exit 1
+fi
+
+# -- 3d: Create table 'impressions' --
+echo "==> Creating Iceberg table 'db.impressions'..."
+
+impressions_payload='{
+  "name": "impressions",
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {"id": 1, "name": "impression_id", "type": "string", "required": false},
+      {"id": 2, "name": "request_id", "type": "string", "required": false},
+      {"id": 3, "name": "response_id", "type": "string", "required": false},
+      {"id": 4, "name": "imp_id", "type": "string", "required": false},
+      {"id": 5, "name": "bidder_id", "type": "string", "required": false},
+      {"id": 6, "name": "win_price", "type": "double", "required": false},
+      {"id": 7, "name": "win_currency", "type": "string", "required": false},
+      {"id": 8, "name": "creative_id", "type": "string", "required": false},
+      {"id": 9, "name": "ad_domain", "type": "string", "required": false},
+      {"id": 10, "name": "event_timestamp", "type": "timestamptz", "required": false}
+    ]
+  },
+  "partition-spec": {
+    "spec-id": 0,
+    "fields": [
+      {"source-id": 10, "transform": "day", "name": "event_timestamp_day", "field-id": 1000}
+    ]
+  },
+  "write-order": {"order-id": 0, "fields": []},
+  "properties": {"format-version": "2"}
+}'
+
+imp_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "${ICEBERG_REST_URL}/v1/namespaces/db/tables" \
+  -H "Content-Type: application/json" \
+  -d "${impressions_payload}")
+
+if [ "$imp_http_code" -eq 200 ]; then
+  echo "    Table 'db.impressions' created successfully."
+elif [ "$imp_http_code" -eq 409 ]; then
+  echo "    Table 'db.impressions' already exists, skipping."
+else
+  echo "    ERROR: Failed to create table 'db.impressions' (HTTP ${imp_http_code})."
+  exit 1
+fi
+
+# -- 3e: Create table 'clicks' --
+echo "==> Creating Iceberg table 'db.clicks'..."
+
+clicks_payload='{
+  "name": "clicks",
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {"id": 1, "name": "click_id", "type": "string", "required": false},
+      {"id": 2, "name": "request_id", "type": "string", "required": false},
+      {"id": 3, "name": "impression_id", "type": "string", "required": false},
+      {"id": 4, "name": "imp_id", "type": "string", "required": false},
+      {"id": 5, "name": "bidder_id", "type": "string", "required": false},
+      {"id": 6, "name": "creative_id", "type": "string", "required": false},
+      {"id": 7, "name": "click_url", "type": "string", "required": false},
+      {"id": 8, "name": "event_timestamp", "type": "timestamptz", "required": false}
+    ]
+  },
+  "partition-spec": {
+    "spec-id": 0,
+    "fields": [
+      {"source-id": 8, "transform": "day", "name": "event_timestamp_day", "field-id": 1000}
+    ]
+  },
+  "write-order": {"order-id": 0, "fields": []},
+  "properties": {"format-version": "2"}
+}'
+
+clk_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "${ICEBERG_REST_URL}/v1/namespaces/db/tables" \
+  -H "Content-Type: application/json" \
+  -d "${clicks_payload}")
+
+if [ "$clk_http_code" -eq 200 ]; then
+  echo "    Table 'db.clicks' created successfully."
+elif [ "$clk_http_code" -eq 409 ]; then
+  echo "    Table 'db.clicks' already exists, skipping."
+else
+  echo "    ERROR: Failed to create table 'db.clicks' (HTTP ${clk_http_code})."
+  exit 1
+fi
+
 # -----------------------------------------------------------------------------
 # Task 4: Submit Flink streaming job
 # -----------------------------------------------------------------------------
@@ -142,12 +273,19 @@ attempt=0
 while [ $attempt -lt $max_attempts ]; do
   attempt=$((attempt + 1))
   tables=$(docker exec trino trino --catalog iceberg --schema db --execute "SHOW TABLES" 2>/dev/null || true)
-  if echo "$tables" | grep -q "bid_requests"; then
-    echo "    Trino verified: 'bid_requests' table is visible."
+  found=true
+  for t in bid_requests bid_responses impressions clicks; do
+    if ! echo "$tables" | grep -q "$t"; then
+      found=false
+      break
+    fi
+  done
+  if [ "$found" = true ]; then
+    echo "    Trino verified: all 4 tables are visible (bid_requests, bid_responses, impressions, clicks)."
     break
   fi
   if [ $attempt -eq $max_attempts ]; then
-    echo "    WARNING: Trino could not find 'bid_requests' after ${max_attempts} attempts."
+    echo "    WARNING: Trino could not find all tables after ${max_attempts} attempts."
     echo "    Check that the Trino service is healthy: docker compose ps trino"
     break
   fi
@@ -208,9 +346,9 @@ echo "    Superset dashboards configured."
 # -----------------------------------------------------------------------------
 echo ""
 echo "==> Setup complete. Infrastructure is ready:"
-echo "    - Kafka topic:    bid-requests (3 partitions)"
+echo "    - Kafka topics:   bid-requests, bid-responses, impressions, clicks (3 partitions each)"
 echo "    - MinIO bucket:   s3://warehouse"
-echo "    - Iceberg table:  db.bid_requests (21 fields, partitioned by day(event_timestamp) + device_geo_country)"
+echo "    - Iceberg tables: db.bid_requests, db.bid_responses, db.impressions, db.clicks"
 echo "    - Flink job:      Streaming Kafka -> Iceberg (check http://localhost:8081)"
 echo "    - Trino:          Query engine ready (http://localhost:8080)"
 echo "    - CloudBeaver:    Web SQL IDE ready (http://localhost:8978)"

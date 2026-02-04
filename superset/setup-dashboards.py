@@ -106,9 +106,8 @@ def find_dataset(session, table_name, database_id):
     return None
 
 
-def create_dataset(session, database_id):
-    """Create the bid_requests dataset, returning its ID."""
-    table_name = "bid_requests"
+def create_dataset(session, database_id, table_name):
+    """Create a dataset for the given table, returning its ID."""
     existing_id = find_dataset(session, table_name, database_id)
     if existing_id:
         print(f"Dataset '{table_name}' already exists (id={existing_id}), skipping")
@@ -122,7 +121,7 @@ def create_dataset(session, database_id):
         }
     )
     if resp.status_code not in (200, 201):
-        print(f"ERROR: Failed to create dataset: {resp.status_code} {resp.text}")
+        print(f"ERROR: Failed to create dataset '{table_name}': {resp.status_code} {resp.text}")
         sys.exit(1)
     ds_id = resp.json()["id"]
     print(f"Created dataset '{table_name}' (id={ds_id})")
@@ -144,9 +143,8 @@ def find_chart(session, name):
     return None
 
 
-def create_chart(session, dataset_id):
-    """Create a pie chart of bid requests by country, returning its ID."""
-    chart_name = "Bid Requests by Country"
+def create_chart(session, chart_name, viz_type, dataset_id, params):
+    """Create a chart with the given config, returning its ID."""
     existing_id = find_chart(session, chart_name)
     if existing_id:
         print(f"Chart '{chart_name}' already exists (id={existing_id}), skipping")
@@ -155,29 +153,14 @@ def create_chart(session, dataset_id):
         f"{SUPERSET_URL}/api/v1/chart/",
         json={
             "slice_name": chart_name,
-            "viz_type": "pie",
+            "viz_type": viz_type,
             "datasource_id": dataset_id,
             "datasource_type": "table",
-            "params": json.dumps({
-                "viz_type": "pie",
-                "groupby": ["device_geo_country"],
-                "metric": {
-                    "expressionType": "SIMPLE",
-                    "column": {"column_name": "request_id"},
-                    "aggregate": "COUNT",
-                    "label": "COUNT(*)"
-                },
-                "adhoc_filters": [],
-                "row_limit": 100,
-                "sort_by_metric": True,
-                "color_scheme": "supersetColors",
-                "show_labels": True,
-                "show_legend": True
-            })
+            "params": json.dumps(params)
         }
     )
     if resp.status_code not in (200, 201):
-        print(f"ERROR: Failed to create chart: {resp.status_code} {resp.text}")
+        print(f"ERROR: Failed to create chart '{chart_name}': {resp.status_code} {resp.text}")
         sys.exit(1)
     chart_id = resp.json()["id"]
     print(f"Created chart '{chart_name}' (id={chart_id})")
@@ -190,8 +173,66 @@ def main():
     login(session)
     get_csrf_token(session)
     database_id = create_database(session)
-    dataset_id = create_dataset(session, database_id)
-    create_chart(session, dataset_id)
+    ds_bid_requests = create_dataset(session, database_id, "bid_requests")
+    ds_bid_responses = create_dataset(session, database_id, "bid_responses")
+    ds_impressions = create_dataset(session, database_id, "impressions")
+    ds_clicks = create_dataset(session, database_id, "clicks")
+
+    count_metric = lambda col: {
+        "expressionType": "SIMPLE",
+        "column": {"column_name": col},
+        "aggregate": "COUNT",
+        "label": "COUNT(*)"
+    }
+
+    create_chart(session, "Bid Requests by Country", "pie", ds_bid_requests, {
+        "viz_type": "pie",
+        "groupby": ["device_geo_country"],
+        "metric": count_metric("request_id"),
+        "adhoc_filters": [],
+        "row_limit": 100,
+        "sort_by_metric": True,
+        "color_scheme": "supersetColors",
+        "show_labels": True,
+        "show_legend": True
+    })
+
+    create_chart(session, "Bid Responses by Bidder Seat", "pie", ds_bid_responses, {
+        "viz_type": "pie",
+        "groupby": ["seat"],
+        "metric": count_metric("response_id"),
+        "adhoc_filters": [],
+        "row_limit": 100,
+        "sort_by_metric": True,
+        "color_scheme": "supersetColors",
+        "show_labels": True,
+        "show_legend": True
+    })
+
+    create_chart(session, "Impressions by Bidder", "pie", ds_impressions, {
+        "viz_type": "pie",
+        "groupby": ["bidder_id"],
+        "metric": count_metric("impression_id"),
+        "adhoc_filters": [],
+        "row_limit": 100,
+        "sort_by_metric": True,
+        "color_scheme": "supersetColors",
+        "show_labels": True,
+        "show_legend": True
+    })
+
+    create_chart(session, "Clicks by Creative", "pie", ds_clicks, {
+        "viz_type": "pie",
+        "groupby": ["creative_id"],
+        "metric": count_metric("click_id"),
+        "adhoc_filters": [],
+        "row_limit": 50,
+        "sort_by_metric": True,
+        "color_scheme": "supersetColors",
+        "show_labels": True,
+        "show_legend": True
+    })
+
     print("Setup complete")
 
 

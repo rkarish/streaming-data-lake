@@ -51,7 +51,7 @@ services:
         condition: service_healthy
     environment:
       CATALOG_CATALOG__IMPL: org.apache.iceberg.jdbc.JdbcCatalog
-      CATALOG_URI: jdbc:sqlite:file:/tmp/iceberg_rest?mode=memory
+      CATALOG_URI: jdbc:sqlite:/tmp/iceberg_rest.db
       CATALOG_JDBC_USER: user
       CATALOG_JDBC_PASSWORD: password
       CATALOG_WAREHOUSE: s3://warehouse/
@@ -78,6 +78,12 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       EVENTS_PER_SECOND: 10
       TOPIC_BID_REQUESTS: bid-requests
+      TOPIC_BID_RESPONSES: bid-responses
+      TOPIC_IMPRESSIONS: impressions
+      TOPIC_CLICKS: clicks
+      BID_RESPONSE_RATE: 0.60
+      WIN_RATE: 0.15
+      CLICK_RATE: 0.02
     restart: on-failure
 
   trino:

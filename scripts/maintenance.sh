@@ -14,28 +14,28 @@ set -euo pipefail
 
 TRINO="docker exec trino trino --catalog iceberg --schema db"
 
-echo "==> Starting Iceberg table maintenance for 'db.bid_requests'..."
+for table in bid_requests bid_responses impressions clicks; do
+  echo "==> Starting Iceberg table maintenance for 'db.${table}'..."
 
-# ---- 1. Compaction ----
-echo ""
-echo "==> [1/3] Compacting small files (target: 128MB)..."
-${TRINO} --execute \
-  "ALTER TABLE bid_requests EXECUTE optimize(file_size_threshold => '128MB')"
-echo "    Compaction complete."
+  echo ""
+  echo "    [1/3] Compacting small files (target: 128MB)..."
+  ${TRINO} --execute \
+    "ALTER TABLE ${table} EXECUTE optimize(file_size_threshold => '128MB')"
+  echo "    Compaction complete."
 
-# ---- 2. Snapshot expiry ----
-echo ""
-echo "==> [2/3] Expiring snapshots older than 7 days..."
-${TRINO} --execute \
-  "ALTER TABLE bid_requests EXECUTE expire_snapshots(retention_threshold => '7d')"
-echo "    Snapshot expiry complete."
+  echo ""
+  echo "    [2/3] Expiring snapshots older than 7 days..."
+  ${TRINO} --execute \
+    "ALTER TABLE ${table} EXECUTE expire_snapshots(retention_threshold => '7d')"
+  echo "    Snapshot expiry complete."
 
-# ---- 3. Orphan file cleanup ----
-echo ""
-echo "==> [3/3] Removing orphan files older than 7 days..."
-${TRINO} --execute \
-  "ALTER TABLE bid_requests EXECUTE remove_orphan_files(retention_threshold => '7d')"
-echo "    Orphan file cleanup complete."
+  echo ""
+  echo "    [3/3] Removing orphan files older than 7 days..."
+  ${TRINO} --execute \
+    "ALTER TABLE ${table} EXECUTE remove_orphan_files(retention_threshold => '7d')"
+  echo "    Orphan file cleanup complete."
 
-echo ""
-echo "==> Table maintenance complete."
+  echo ""
+done
+
+echo "==> Table maintenance complete for all tables."

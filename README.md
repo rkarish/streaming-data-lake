@@ -1,6 +1,6 @@
 # AdTech Data Lake Streaming Platform
 
-A data lake streaming platform for adtech that produces OpenRTB 2.6 bid request events to Apache Kafka, streams them through Apache Flink, and stores them in Apache Iceberg tables backed by MinIO (S3-compatible) object storage.
+A data lake streaming platform for adtech that produces a full OpenRTB 2.6 event funnel (bid requests, bid responses, impressions, clicks) to Apache Kafka, streams them through Apache Flink, and stores them in Apache Iceberg tables backed by MinIO (S3-compatible) object storage. Includes Trino as the SQL query engine, CloudBeaver as a web-based SQL IDE, and Apache Superset for dashboards and visualization.
 
 See [`.design/adtech-data-lake-streaming-platform.md`](.design/adtech-data-lake-streaming-platform.md) for the full design document.
 
@@ -49,6 +49,16 @@ Mock Data Gen  --->  Kafka (KRaft)
 - Docker and Docker Compose
 - Python 3.12+ (for local development only)
 - `curl` (for setup script)
+- [Claude Code](https://claude.com/claude-code) with the `voltagent-data-ai` subagent (for AI-assisted development)
+
+### Claude Code Subagent Setup
+
+This project uses the `voltagent-data-ai:data-engineer` subagent for implementation and engineering tasks. Install it via the [VoltAgent plugin marketplace](https://github.com/VoltAgent/awesome-claude-code-subagents):
+
+```bash
+claude plugin marketplace add VoltAgent/awesome-claude-code-subagents
+claude plugin install voltagent-data-ai
+```
 
 ## Quick Start (Docker)
 
@@ -72,7 +82,7 @@ docker compose ps
 
 ### 2. Run the setup script
 
-Creates the Kafka topic, MinIO bucket, Iceberg namespace + table, submits the Flink streaming job, and verifies Trino connectivity:
+Creates the Kafka topics, MinIO bucket, Iceberg namespace + tables, submits the Flink streaming job, and verifies Trino connectivity:
 
 ```bash
 bash scripts/setup.sh
@@ -80,7 +90,7 @@ bash scripts/setup.sh
 
 ### 3. Verify
 
-Check that bid request events are flowing through Kafka:
+Check that events are flowing through Kafka (4 topics: `bid-requests`, `bid-responses`, `impressions`, `clicks`):
 
 ```bash
 docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
@@ -104,16 +114,20 @@ docker compose exec minio mc ls --recursive local/warehouse/db/bid_requests/
 
 Open the Flink Web UI at [http://localhost:8081](http://localhost:8081) to monitor records received/sent.
 
-Verify the Iceberg table exists:
+Verify the Iceberg tables exist:
 
 ```bash
 curl -s http://localhost:8181/v1/namespaces/db/tables | python3 -m json.tool
 ```
 
-Check the MinIO bucket:
+Query all 4 tables via Trino:
 
 ```bash
-docker exec minio mc ls local/warehouse/
+docker exec trino trino --catalog iceberg --schema db \
+  --execute "SELECT 'bid_requests' AS t, COUNT(*) AS cnt FROM bid_requests
+             UNION ALL SELECT 'bid_responses', COUNT(*) FROM bid_responses
+             UNION ALL SELECT 'impressions', COUNT(*) FROM impressions
+             UNION ALL SELECT 'clicks', COUNT(*) FROM clicks"
 ```
 
 View generator logs:
@@ -124,7 +138,7 @@ docker compose logs mock-data-gen --tail 20
 
 ### 4. Read data from Kafka
 
-Consume a few messages from the topic:
+Consume a few messages from any topic (replace `bid-requests` with `bid-responses`, `impressions`, or `clicks`):
 
 ```bash
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
@@ -238,25 +252,33 @@ Open [http://localhost:8978](http://localhost:8978). On the first launch you wil
 1. Set an admin password (must meet complexity requirements, e.g. `Password123!`)
 2. Finish the wizard
 
-Once configured, click the CloudBeaver logo in the top-left corner to reach the main database UI. The pre-configured "Trino Iceberg" connection appears in the sidebar. Expand it to browse the `iceberg > db > bid_requests` table and run SQL queries.
+Once configured, click the CloudBeaver logo in the top-left corner to reach the main database UI. The pre-configured "Trino Iceberg" connection appears in the sidebar. Expand it to browse the `iceberg > db` schema with all 4 tables (`bid_requests`, `bid_responses`, `impressions`, `clicks`) and run SQL queries.
 
-The workspace is persisted in a Docker volume (`cloudbeaver-workspace`), so subsequent restarts will skip the wizard.
+The workspace is persisted in a Docker volume (`cloudbeaver-workspace`), so subsequent restarts will skip the wizard. After a restart, you will need to click the settings icon in the top-right corner, click "Log In", and sign in with the admin credentials you set during the wizard (e.g. `cbadmin` / `Password123!`).
 
 ### 9. Superset (Charts & SQL Lab)
 
 Open [http://localhost:8088](http://localhost:8088) and log in with `admin` / `password`. The setup script creates:
 
 - A Trino database connection
-- A `bid_requests` dataset
-- A "Bid Requests by Country" pie chart (visible under Charts)
+- Datasets for all 4 tables (`bid_requests`, `bid_responses`, `impressions`, `clicks`)
+- Charts (visible under Charts):
+  - "Bid Requests by Country" -- pie chart of request volume by geo
+  - "Bid Responses by Bidder Seat" -- pie chart of responses per bidder
+  - "Impressions by Bidder" -- pie chart of win counts per bidder
+  - "Clicks by Creative" -- pie chart of click counts per creative
 
 You can also use SQL Lab to run ad-hoc queries against Trino.
 
 ### 10. Stop
 
+If the mock data generator is running, you must include the `generator` profile when stopping -- otherwise the generator container keeps running and holds the Docker network open:
+
 ```bash
-docker compose down
+docker compose --profile generator down
 ```
+
+If you haven't started the generator, a plain `docker compose down` is sufficient.
 
 ## Local Development (without Docker for the generator)
 
@@ -277,7 +299,7 @@ docker compose ps
 
 ### 2. Run the setup script
 
-Creates the Kafka topic, MinIO bucket, Iceberg namespace + table, submits the Flink streaming job, and verifies Trino connectivity:
+Creates the Kafka topics, MinIO bucket, Iceberg namespace + tables, submits the Flink streaming job, and verifies Trino connectivity:
 
 ```bash
 bash scripts/setup.sh
@@ -330,8 +352,14 @@ docker compose exec minio mc ls --recursive local/warehouse/db/bid_requests/
 | Variable | Default | Description |
 |---|---|---|
 | `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` (Docker) / `localhost:29092` (local) | Kafka broker address |
-| `EVENTS_PER_SECOND` | `10` | Target event throughput |
-| `TOPIC_BID_REQUESTS` | `bid-requests` | Kafka topic name |
+| `EVENTS_PER_SECOND` | `10` | Target bid-request throughput |
+| `TOPIC_BID_REQUESTS` | `bid-requests` | Kafka topic for bid requests |
+| `TOPIC_BID_RESPONSES` | `bid-responses` | Kafka topic for bid responses |
+| `TOPIC_IMPRESSIONS` | `impressions` | Kafka topic for impressions |
+| `TOPIC_CLICKS` | `clicks` | Kafka topic for clicks |
+| `BID_RESPONSE_RATE` | `0.60` | Probability a bid request gets a response (~60% fill rate) |
+| `WIN_RATE` | `0.15` | Probability a bid response wins the auction (~15%) |
+| `CLICK_RATE` | `0.02` | Probability an impression generates a click (~2% CTR) |
 
 ### Flink Web UI
 
@@ -377,7 +405,7 @@ streaming-data-lake/
     Dockerfile                     # Container image
     src/
       config.py                    # Configuration from env vars
-      schemas.py                   # OpenRTB 2.6 BidRequest generator
+      schemas.py                   # OpenRTB 2.6 event generators (bid request, response, impression, click)
       generator.py                 # Kafka producer loop
   streaming/
     flink/
@@ -398,8 +426,8 @@ streaming-data-lake/
     bootstrap.sh                   # DB migration, admin creation, server start
     setup-dashboards.py            # REST API script to create dashboards
   scripts/
-    setup.sh                       # Initialize topics, bucket, tables, Flink job, verify Trino, setup dashboards
+    setup.sh                       # Initialize 4 topics, bucket, 4 tables, Flink job, verify Trino, setup dashboards
     run-local.sh                   # Run generator in local .venv
     query-examples.sh              # Sample analytical queries via Trino
-    maintenance.sh                 # Iceberg table maintenance (compaction, expiry, cleanup)
+    maintenance.sh                 # Iceberg table maintenance for all 4 tables (compaction, expiry, cleanup)
 ```

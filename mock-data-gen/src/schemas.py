@@ -144,3 +144,93 @@ def generate_bid_request() -> dict:
         "event_timestamp": event_ts.isoformat(),
         "received_at": received_at.isoformat(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Bid-response data
+# ---------------------------------------------------------------------------
+
+BIDDER_SEATS = ["seat-alpha", "seat-beta", "seat-gamma", "seat-delta", "seat-epsilon"]
+AD_DOMAINS = ["ads.example.com", "media.adnetwork.io", "serve.bidder.co", "cdn.adx.net"]
+CREATIVE_IDS = [f"cr-{i}" for i in range(1000, 1050)]
+DEAL_IDS = [f"deal-{i}" for i in range(1, 20)]
+
+
+def generate_bid_response(bid_request: dict) -> dict:
+    """Generate an OpenRTB 2.6 BidResponse correlated to the given bid_request."""
+    req_ts = datetime.fromisoformat(bid_request["event_timestamp"])
+    response_ts = req_ts + timedelta(milliseconds=random.randint(5, 80))
+
+    imp = bid_request["imp"][0]
+    bidfloor = imp["bidfloor"]
+    price = round(bidfloor + random.uniform(0.01, 3.00), 2)
+
+    bid_obj = {
+        "id": fake.uuid4(),
+        "impid": imp["id"],
+        "price": price,
+        "adid": fake.uuid4(),
+        "crid": random.choice(CREATIVE_IDS),
+        "adomain": [random.choice(AD_DOMAINS)],
+        "w": imp["banner"]["w"],
+        "h": imp["banner"]["h"],
+    }
+
+    if random.random() < 0.10:
+        bid_obj["dealid"] = random.choice(DEAL_IDS)
+
+    return {
+        "id": fake.uuid4(),
+        "seatbid": [
+            {
+                "seat": random.choice(BIDDER_SEATS),
+                "bid": [bid_obj],
+            }
+        ],
+        "bidid": fake.uuid4(),
+        "cur": "USD",
+        "ext": {
+            "request_id": bid_request["id"],
+        },
+        "event_timestamp": response_ts.isoformat(),
+    }
+
+
+def generate_impression(bid_request: dict, bid_response: dict) -> dict:
+    """Generate a win-notice / impression event correlated to a bid request and response."""
+    req_ts = datetime.fromisoformat(bid_request["event_timestamp"])
+    imp_ts = req_ts + timedelta(milliseconds=random.randint(100, 500))
+
+    bid_obj = bid_response["seatbid"][0]["bid"][0]
+    bid_price = bid_obj["price"]
+    win_price = round(random.uniform(bid_request["imp"][0]["bidfloor"], bid_price), 2)
+
+    return {
+        "impression_id": fake.uuid4(),
+        "request_id": bid_request["id"],
+        "response_id": bid_response["id"],
+        "imp_id": bid_obj["impid"],
+        "bidder_id": bid_response["seatbid"][0]["seat"],
+        "win_price": win_price,
+        "win_currency": "USD",
+        "creative_id": bid_obj["crid"],
+        "ad_domain": bid_obj["adomain"][0],
+        "event_timestamp": imp_ts.isoformat(),
+    }
+
+
+def generate_click(bid_request: dict, impression: dict) -> dict:
+    """Generate a click event correlated to an impression."""
+    imp_ts = datetime.fromisoformat(impression["event_timestamp"])
+    click_ts = imp_ts + timedelta(seconds=random.randint(1, 10))
+
+    return {
+        "click_id": fake.uuid4(),
+        "request_id": bid_request["id"],
+        "impression_id": impression["impression_id"],
+        "imp_id": impression["imp_id"],
+        "bidder_id": impression["bidder_id"],
+        "creative_id": impression["creative_id"],
+        "click_url": f"https://{impression['ad_domain']}/click/{fake.uuid4()}",
+        "event_timestamp": click_ts.isoformat(),
+    }

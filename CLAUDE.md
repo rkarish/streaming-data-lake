@@ -4,7 +4,7 @@
 
 All design documents are located in the `.design/` directory. Review these before making architectural decisions or implementing new features.
 
-- [AdTech Data Lake Streaming Platform](.design/adtech-data-lake-streaming-platform.md) - Core platform design covering the OpenRTB 2.6 data model, streaming engine options (Flink, Spark, Kafka Connect), Iceberg table schemas, Docker Compose architecture, and cloud expansion paths for AWS/GCP.
+- [AdTech Data Lake Streaming Platform](.design/adtech-data-lake-streaming-platform.md)
 
 ## Subagent Usage
 
