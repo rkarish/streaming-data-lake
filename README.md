@@ -1,16 +1,16 @@
-# AdTech Streaming Data Platform
+# AdTech Data Lake Streaming Platform
 
-A streaming data platform for adtech that produces OpenRTB 2.6 bid request events to Apache Kafka and stores them in Apache Iceberg tables backed by MinIO (S3-compatible) object storage.
+A data lake streaming platform for adtech that produces OpenRTB 2.6 bid request events to Apache Kafka, streams them through Apache Flink, and stores them in Apache Iceberg tables backed by MinIO (S3-compatible) object storage.
 
-See [`.design/adtech-streaming-platform.md`](.design/adtech-streaming-platform.md) for the full design document.
+See [`.design/adtech-data-lake-streaming-platform.md`](.design/adtech-data-lake-streaming-platform.md) for the full design document.
 
-## Architecture (Phase 1)
+## Architecture
 
 ```
 Mock Data Gen  --->  Kafka (KRaft)
                          |
                          v
-                   (Phase 2: Flink)
+                   Flink (SQL Job)
                          |
               +----------+----------+
               |                     |
@@ -28,6 +28,8 @@ Mock Data Gen  --->  Kafka (KRaft)
 | `minio` | `minio/minio:latest` | 9000 (S3), 9001 (console) |
 | `iceberg-rest` | `tabulario/iceberg-rest:0.10.0` | 8181 |
 | `mock-data-gen` | Custom (Python 3.12) | -- |
+| `flink-jobmanager` | Custom (Flink 1.20 + Iceberg) | 8081 (Web UI) |
+| `flink-taskmanager` | Custom (Flink 1.20 + Iceberg) | -- |
 
 ## Prerequisites
 
@@ -37,10 +39,10 @@ Mock Data Gen  --->  Kafka (KRaft)
 
 ## Quick Start (Docker)
 
-### 1. Start all services
+### 1. Build and start all services
 
 ```bash
-docker compose up -d
+docker compose up --build -d
 ```
 
 Wait for all services to become healthy:
@@ -51,7 +53,7 @@ docker compose ps
 
 ### 2. Run the setup script
 
-Creates the Kafka topic, MinIO bucket, and Iceberg namespace + table:
+Creates the Kafka topic, MinIO bucket, Iceberg namespace + table, and submits the Flink streaming job:
 
 ```bash
 bash scripts/setup.sh
@@ -59,15 +61,29 @@ bash scripts/setup.sh
 
 ### 3. Verify
 
-Check that bid request events are flowing:
+Check that bid request events are flowing through Kafka:
 
 ```bash
 docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 \
-  --topic bid_requests \
+  --topic bid-requests \
   --from-beginning \
   --max-messages 3
 ```
+
+Verify the Flink job is running:
+
+```bash
+curl -s http://localhost:8081/jobs | python3 -m json.tool
+```
+
+Check that Parquet files appear in MinIO (after the first checkpoint, ~60s):
+
+```bash
+docker compose exec minio mc ls --recursive local/warehouse/db/bid_requests/
+```
+
+Open the Flink Web UI at [http://localhost:8081](http://localhost:8081) to monitor records received/sent.
 
 Verify the Iceberg table exists:
 
@@ -94,7 +110,7 @@ Consume a few messages from the topic:
 ```bash
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 \
-  --topic bid_requests \
+  --topic bid-requests \
   --from-beginning \
   --max-messages 5
 ```
@@ -104,7 +120,7 @@ Pipe through `python3` for pretty-printed JSON:
 ```bash
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 \
-  --topic bid_requests \
+  --topic bid-requests \
   --from-beginning \
   --max-messages 1 | python3 -m json.tool
 ```
@@ -114,7 +130,7 @@ Check topic offsets (total message count per partition):
 ```bash
 docker compose exec kafka /opt/kafka/bin/kafka-get-offsets.sh \
   --bootstrap-server localhost:9092 \
-  --topic bid_requests
+  --topic bid-requests
 ```
 
 Tail new messages in real time (Ctrl+C to stop):
@@ -122,10 +138,56 @@ Tail new messages in real time (Ctrl+C to stop):
 ```bash
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 \
-  --topic bid_requests
+  --topic bid-requests
 ```
 
-### 5. Stop
+### 5. Query the Iceberg table (Flink SQL)
+
+Open a Flink SQL Client session:
+
+```bash
+docker compose exec flink-jobmanager /opt/flink/bin/sql-client.sh embedded
+```
+
+Register the Iceberg catalog (required each session):
+
+```sql
+CREATE CATALOG iceberg_catalog WITH (
+    'type' = 'iceberg',
+    'catalog-type' = 'rest',
+    'uri' = 'http://iceberg-rest:8181',
+    'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+    's3.endpoint' = 'http://minio:9000',
+    's3.path-style-access' = 'true',
+    'warehouse' = 's3://warehouse/'
+);
+```
+
+Switch to batch mode (without this, queries run in streaming mode and never finish):
+
+```sql
+SET 'execution.runtime-mode' = 'batch';
+```
+
+Run queries:
+
+```sql
+-- Preview rows
+SELECT * FROM iceberg_catalog.db.bid_requests LIMIT 10;
+
+-- Count total records
+SELECT COUNT(*) FROM iceberg_catalog.db.bid_requests;
+
+-- Aggregation example
+SELECT device_geo_country, COUNT(*) AS cnt
+FROM iceberg_catalog.db.bid_requests
+GROUP BY device_geo_country
+ORDER BY cnt DESC;
+```
+
+Type `QUIT;` to exit the SQL client.
+
+### 6. Stop
 
 ```bash
 docker compose down
@@ -133,15 +195,24 @@ docker compose down
 
 ## Local Development (without Docker for the generator)
 
-You can run the mock data generator outside Docker while keeping Kafka and the other infrastructure services in Docker.
+You can run the mock data generator outside Docker while keeping Kafka, Flink, and the other infrastructure services in Docker.
 
-### 1. Start infrastructure services only
+### 1. Build and start infrastructure services
 
 ```bash
-docker compose up kafka minio iceberg-rest -d
+docker compose build flink-jobmanager flink-taskmanager
+docker compose up kafka minio iceberg-rest flink-jobmanager flink-taskmanager -d
+```
+
+Wait for all services to become healthy:
+
+```bash
+docker compose ps
 ```
 
 ### 2. Run the setup script
+
+Creates the Kafka topic, MinIO bucket, Iceberg namespace + table, and submits the Flink streaming job:
 
 ```bash
 bash scripts/setup.sh
@@ -171,6 +242,22 @@ cd mock-data-gen
 KAFKA_BOOTSTRAP_SERVERS=localhost:29092 python -m src.generator
 ```
 
+### 4. Verify the Flink pipeline
+
+Check that the Flink job is running:
+
+```bash
+curl -s http://localhost:8081/jobs | python3 -m json.tool
+```
+
+Open the Flink Web UI at [http://localhost:8081](http://localhost:8081) to monitor records received/sent.
+
+After ~60 seconds (first Flink checkpoint), verify Parquet files are landing in MinIO:
+
+```bash
+docker compose exec minio mc ls --recursive local/warehouse/db/bid_requests/
+```
+
 ## Configuration
 
 ### Mock Data Generator
@@ -179,7 +266,11 @@ KAFKA_BOOTSTRAP_SERVERS=localhost:29092 python -m src.generator
 |---|---|---|
 | `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` (Docker) / `localhost:29092` (local) | Kafka broker address |
 | `EVENTS_PER_SECOND` | `10` | Target event throughput |
-| `TOPIC_BID_REQUESTS` | `bid_requests` | Kafka topic name |
+| `TOPIC_BID_REQUESTS` | `bid-requests` | Kafka topic name |
+
+### Flink Web UI
+
+Access the Flink dashboard at [http://localhost:8081](http://localhost:8081) to monitor running jobs, checkpoints, and task metrics.
 
 ### MinIO Console
 
@@ -207,7 +298,14 @@ streaming-data-lake/
       config.py                    # Configuration from env vars
       schemas.py                   # OpenRTB 2.6 BidRequest generator
       generator.py                 # Kafka producer loop
+  streaming/
+    flink/
+      Dockerfile                   # Custom Flink 1.20 image with Iceberg JARs
+      submit-sql-job.sh            # Waits for deps, submits SQL job
+      sql/
+        create_tables.sql          # Flink SQL DDL (catalogs + source tables)
+        insert_jobs.sql            # Flink SQL DML (streaming insert)
   scripts/
-    setup.sh                       # Initialize topics, bucket, tables
+    setup.sh                       # Initialize topics, bucket, tables, Flink job
     run-local.sh                   # Run generator in local .venv
 ```

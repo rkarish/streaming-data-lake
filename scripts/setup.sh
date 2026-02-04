@@ -2,12 +2,13 @@
 set -euo pipefail
 
 # =============================================================================
-# AdTech Streaming Data Platform - Phase 1 Setup
+# AdTech Data Lake Streaming Platform - Setup
 # =============================================================================
 # Run this script AFTER `docker compose up -d` to initialize:
-#   1. Kafka topic (bid_requests)
+#   1. Kafka topic (bid-requests)
 #   2. MinIO bucket (warehouse)
 #   3. Iceberg namespace and table (db.bid_requests)
+#   4. Flink streaming job (Kafka -> Iceberg)
 # =============================================================================
 
 ICEBERG_REST_URL="http://localhost:8181"
@@ -15,17 +16,17 @@ ICEBERG_REST_URL="http://localhost:8181"
 # -----------------------------------------------------------------------------
 # Task 1: Create Kafka topic
 # -----------------------------------------------------------------------------
-echo "==> Creating Kafka topic 'bid_requests' (3 partitions, replication-factor 1)..."
+echo "==> Creating Kafka topic 'bid-requests' (3 partitions, replication-factor 1)..."
 
 docker exec kafka /opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server localhost:9092 \
   --create \
-  --topic bid_requests \
+  --topic bid-requests \
   --partitions 3 \
   --replication-factor 1 \
   --if-not-exists
 
-echo "    Kafka topic 'bid_requests' is ready."
+echo "    Kafka topic 'bid-requests' is ready."
 
 # -----------------------------------------------------------------------------
 # Task 2: Create MinIO bucket
@@ -73,7 +74,7 @@ table_payload='{
       {"id": 5, "name": "imp_bidfloor", "type": "double", "required": false},
       {"id": 6, "name": "site_id", "type": "string", "required": false},
       {"id": 7, "name": "site_domain", "type": "string", "required": false},
-      {"id": 8, "name": "site_cat", "type": {"type": "list", "element-id": 22, "element": "string"}, "required": false},
+      {"id": 8, "name": "site_cat", "type": {"type": "list", "element-id": 22, "element": "string", "element-required": false}, "required": false},
       {"id": 9, "name": "publisher_id", "type": "string", "required": false},
       {"id": 10, "name": "device_type", "type": "int", "required": false},
       {"id": 11, "name": "device_os", "type": "string", "required": false},
@@ -90,12 +91,14 @@ table_payload='{
     ]
   },
   "partition-spec": {
+    "spec-id": 0,
     "fields": [
-      {"source-id": 20, "transform": "day", "name": "event_timestamp_day"},
-      {"source-id": 12, "transform": "identity", "name": "device_geo_country"}
+      {"source-id": 20, "transform": "day", "name": "event_timestamp_day", "field-id": 1000},
+      {"source-id": 12, "transform": "identity", "name": "device_geo_country", "field-id": 1001}
     ]
   },
   "write-order": {
+    "order-id": 0,
     "fields": []
   },
   "properties": {
@@ -118,10 +121,20 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Task 4: Submit Flink streaming job
+# -----------------------------------------------------------------------------
+echo "==> Submitting Flink streaming job (Kafka -> Iceberg)..."
+
+docker compose exec -T flink-jobmanager bash /opt/flink/submit-sql-job.sh
+
+echo "    Flink streaming job submitted."
+
+# -----------------------------------------------------------------------------
 # Done
 # -----------------------------------------------------------------------------
 echo ""
 echo "==> Setup complete. Infrastructure is ready:"
-echo "    - Kafka topic:    bid_requests (3 partitions)"
+echo "    - Kafka topic:    bid-requests (3 partitions)"
 echo "    - MinIO bucket:   s3://warehouse"
 echo "    - Iceberg table:  db.bid_requests (21 fields, partitioned by day(event_timestamp) + device_geo_country)"
+echo "    - Flink job:      Streaming Kafka -> Iceberg (check http://localhost:8081)"

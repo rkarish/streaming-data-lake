@@ -1,8 +1,8 @@
-# AdTech Streaming Data Platform - Design Document
+# AdTech Data Lake Streaming Platform - Design Document
 
 ## 1. Overview
 
-A streaming data platform for adtech that consumes OpenRTB-formatted bid request/response events from Apache Kafka and writes them into Apache Iceberg tables backed by object storage. The system runs locally via Docker Compose and is designed for straightforward expansion to AWS (S3 + EMR/EKS) or GCP (GCS + Dataproc/GKE).
+A data lake streaming platform for adtech that consumes OpenRTB-formatted bid request/response events from Apache Kafka and writes them into Apache Iceberg tables backed by object storage. The system runs locally via Docker Compose and is designed for straightforward expansion to AWS (S3 + EMR/EKS) or GCP (GCS + Dataproc/GKE).
 
 ## 2. Goals
 
@@ -20,8 +20,8 @@ Mock data generators will produce realistic OpenRTB 2.6 JSON payloads and publis
 
 | Topic | Description |
 |---|---|
-| `bid_requests` | OpenRTB 2.6 BidRequest objects |
-| `bid_responses` | OpenRTB 2.6 BidResponse objects |
+| `bid-requests` | OpenRTB 2.6 BidRequest objects |
+| `bid-responses` | OpenRTB 2.6 BidResponse objects |
 | `impressions` | Win notice / impression tracking events |
 | `clicks` | Click tracking events |
 
@@ -156,7 +156,7 @@ Three approaches were evaluated for streaming Kafka data into Iceberg. **Apache 
 df = spark.readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", "kafka:9092") \
-    .option("subscribe", "bid_requests") \
+    .option("subscribe", "bid-requests") \
     .load()
 
 parsed = df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
@@ -165,7 +165,7 @@ parsed.writeStream \
     .format("iceberg") \
     .outputMode("append") \
     .option("fanout-enabled", "true") \
-    .option("checkpointLocation", "/tmp/checkpoints/bid_requests") \
+    .option("checkpointLocation", "/tmp/checkpoints/bid-requests") \
     .toTable("iceberg_catalog.db.bid_requests")
 ```
 
@@ -200,7 +200,7 @@ parsed.writeStream \
   "config": {
     "connector.class": "io.tabular.iceberg.connect.IcebergSinkConnector",
     "tasks.max": "2",
-    "topics": "bid_requests",
+    "topics": "bid-requests",
     "iceberg.tables": "db.bid_requests",
     "iceberg.catalog.type": "rest",
     "iceberg.catalog.uri": "http://iceberg-rest:8181",
@@ -431,7 +431,7 @@ streaming-data-lake/
 
 ### Phase 1: Foundation
 - Docker Compose with Kafka (KRaft), MinIO, Iceberg REST catalog
-- Mock data generator producing to `bid_requests` topic
+- Mock data generator producing to `bid-requests` topic
 - Basic Iceberg table creation
 
 ### Phase 2: Streaming Pipeline

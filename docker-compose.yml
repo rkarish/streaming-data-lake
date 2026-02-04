@@ -1,6 +1,8 @@
 services:
   kafka:
     image: apache/kafka:3.8.1
+    container_name: kafka
+    hostname: kafka
     ports:
       - "29092:29092"
     environment:
@@ -25,6 +27,7 @@ services:
 
   minio:
     image: minio/minio:latest
+    container_name: minio
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -59,7 +62,7 @@ services:
       AWS_SECRET_ACCESS_KEY: password
       AWS_REGION: us-east-1
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8181/v1/config"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8181"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -73,5 +76,50 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       EVENTS_PER_SECOND: 10
-      TOPIC_BID_REQUESTS: bid_requests
+      TOPIC_BID_REQUESTS: bid-requests
     restart: on-failure
+
+  flink-jobmanager:
+    build: ./streaming/flink
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        state.checkpoints.dir: s3://warehouse/checkpoints/
+        s3.endpoint: http://minio:9000
+        s3.path.style.access: true
+        s3.access-key: admin
+        s3.secret-key: password
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+      AWS_REGION: us-east-1
+    volumes:
+      - ./streaming/flink/sql:/opt/flink/sql
+      - ./streaming/flink/submit-sql-job.sh:/opt/flink/submit-sql-job.sh
+
+  flink-taskmanager:
+    build: ./streaming/flink
+    command: taskmanager
+    depends_on:
+      - flink-jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        state.checkpoints.dir: s3://warehouse/checkpoints/
+        s3.endpoint: http://minio:9000
+        s3.path.style.access: true
+        s3.access-key: admin
+        s3.secret-key: password
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+      AWS_REGION: us-east-1

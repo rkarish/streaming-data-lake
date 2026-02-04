@@ -10,7 +10,7 @@
       "env": {
         "KAFKA_BOOTSTRAP_SERVERS": "localhost:29092",
         "EVENTS_PER_SECOND": "10",
-        "TOPIC_BID_REQUESTS": "bid_requests"
+        "TOPIC_BID_REQUESTS": "bid-requests"
       },
       "console": "integratedTerminal"
     }

@@ -47,7 +47,7 @@ pip install --quiet "${MOCK_DIR}"
 # Default to localhost when running outside Docker
 export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-localhost:29092}"
 export EVENTS_PER_SECOND="${EVENTS_PER_SECOND:-10}"
-export TOPIC_BID_REQUESTS="${TOPIC_BID_REQUESTS:-bid_requests}"
+export TOPIC_BID_REQUESTS="${TOPIC_BID_REQUESTS:-bid-requests}"
 
 echo "==> Starting mock data generator (${EVENTS_PER_SECOND} events/sec to ${KAFKA_BOOTSTRAP_SERVERS})..."
 echo "    Press Ctrl+C to stop."
