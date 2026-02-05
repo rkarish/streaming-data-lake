@@ -376,6 +376,59 @@ After ~60 seconds (first Flink checkpoint), verify Parquet files are landing in 
 docker compose exec minio mc ls --recursive local/warehouse/db/bid_requests/
 ```
 
+## VS Code Tasks
+
+Run any task via **Terminal > Run Task...** (or `Cmd+Shift+P` > "Tasks: Run Task"). All tasks are defined in `.vscode/tasks.json`.
+
+### Lifecycle
+
+| Task | Description |
+|---|---|
+| `reload-system` | Stop all services, restart, and run full setup |
+| `start-services` | Start all infrastructure services |
+| `stop-services` | Stop all services |
+| `run-setup` | Run the setup script (topics, bucket, tables, Flink jobs, Trino/Superset verification) |
+
+### Data Generator
+
+| Task | Description |
+|---|---|
+| `start-data-generator` | Start the mock data generator container |
+| `stop-data-generator` | Stop the mock data generator container |
+| `backfill-data-1h` | Start the generator with 1 hour of historical backfill |
+
+### Flink & Maintenance
+
+| Task | Description |
+|---|---|
+| `submit-flink-jobs` | Resubmit all Flink SQL streaming jobs |
+| `run-table-maintenance` | Run Iceberg table maintenance (compaction, snapshot expiry, orphan cleanup) |
+| `run-query-examples` | Run sample analytical queries via Trino |
+
+### Logs
+
+| Task | Description |
+|---|---|
+| `view-flink-logs` | Tail Flink jobmanager and taskmanager logs |
+| `view-kafka-logs` | Tail Kafka broker logs |
+| `view-generator-logs` | Tail mock data generator logs |
+
+### Kafka Topic Consumers
+
+| Task | Description |
+|---|---|
+| `tail-topic-bid-requests` | Tail messages from the `bid-requests` topic |
+| `tail-topic-bid-responses` | Tail messages from the `bid-responses` topic |
+| `tail-topic-impressions` | Tail messages from the `impressions` topic |
+| `tail-topic-clicks` | Tail messages from the `clicks` topic |
+
+### Diagnostics
+
+| Task | Description |
+|---|---|
+| `list-kafka-topics` | Describe all Kafka topics (partitions, replicas, offsets) |
+| `check-service-health` | Show container status and port mappings |
+
 ## Configuration
 
 ### Mock Data Generator
