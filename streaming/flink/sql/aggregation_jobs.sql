@@ -13,23 +13,25 @@ SET 'table.exec.state.ttl' = '86400000';
 EXECUTE STATEMENT SET
 BEGIN
 
--- Hourly impressions by bidder: tumbling 1-hour window
--- Computes impression counts and revenue metrics grouped by bidder seat
--- Note: Geo-based aggregation would require joining with bid_requests (deferred to Phase 7)
--- Uses upsert mode to update aggregates as new data arrives
--- Uses event_ts (computed column with watermark) for event-time windowing
--- Uses explicit Flink sink table with upsert-enabled for proper Iceberg writes
+-- Hourly impressions by geo: interval join with hour-bucketed aggregation
+-- Joins impressions with bid_requests to get actual device geo country
+-- Uses FLOOR(TO HOUR) instead of TUMBLE because time attributes lose their
+-- watermark property after an interval join, preventing TUMBLE from firing.
+-- The upsert sink continuously updates aggregates per (hour, country) key.
 INSERT INTO iceberg_hourly_impressions_by_geo
 SELECT
-    TUMBLE_START(`event_ts`, INTERVAL '1' HOUR) AS window_start,
-    `bidder_id` AS device_geo_country,
+    FLOOR(imp.`event_ts` TO HOUR) AS window_start,
+    br.`device`.`geo`.`country` AS device_geo_country,
     COUNT(*) AS impression_count,
-    SUM(`win_price`) AS total_revenue,
-    AVG(`win_price`) AS avg_win_price
-FROM kafka_impressions
+    SUM(imp.`win_price`) AS total_revenue,
+    AVG(imp.`win_price`) AS avg_win_price
+FROM kafka_impressions imp
+INNER JOIN kafka_bid_requests br
+    ON imp.`request_id` = br.`id`
+    AND br.`event_ts` BETWEEN imp.`event_ts` - INTERVAL '10' SECOND AND imp.`event_ts`
 GROUP BY
-    TUMBLE(`event_ts`, INTERVAL '1' HOUR),
-    `bidder_id`;
+    FLOOR(imp.`event_ts` TO HOUR),
+    br.`device`.`geo`.`country`;
 
 -- Rolling 5-minute metrics by bidder: sliding window (1-min hop, 5-min size)
 -- Provides near-real-time metrics for dashboards, updated every minute

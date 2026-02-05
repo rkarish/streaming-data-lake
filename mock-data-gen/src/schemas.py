@@ -119,7 +119,7 @@ def generate_private_ip() -> str:
         return f"172.{random.randint(16, 31)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
 
 
-def generate_bid_request() -> dict:
+def generate_bid_request(base_ts: datetime | None = None) -> dict:
     """
     Generate a single OpenRTB 2.6 BidRequest dictionary.
 
@@ -135,6 +135,10 @@ def generate_bid_request() -> dict:
     - test_publisher_rate: Percentage of requests with test-* publisher IDs
     - invalid_ip_rate: Percentage of requests with RFC1918 private IPs
     - non_usd_currency_rate: Percentage of requests with non-USD bid floor currency
+
+    Args:
+        base_ts: Optional base timestamp for the event. If None, uses current UTC time.
+                 Used by backfill mode to generate historical events.
 
     Returns:
         dict: A complete OpenRTB 2.6 BidRequest object with realistic mock data
@@ -240,8 +244,9 @@ def generate_bid_request() -> dict:
     gdpr = random.choices([0, 1], weights=[0.70, 0.30], k=1)[0]
 
     # Timestamps: event_timestamp is when the request was created,
-    # received_at simulates a small network delay
-    event_ts = datetime.now(timezone.utc)
+    # received_at simulates a small network delay.
+    # base_ts allows backfill mode to inject historical timestamps.
+    event_ts = base_ts if base_ts is not None else datetime.now(timezone.utc)
     received_at = event_ts + timedelta(milliseconds=random.randint(1, 50))
 
     # Construct the complete OpenRTB 2.6 BidRequest object

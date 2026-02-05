@@ -11,10 +11,10 @@ Mock Data Gen  --->  Kafka (KRaft)
                          |
                          v
       +---------------------------------------+
-      |                Flink                  |
-      |  Core Funnel &       Streaming        |
-      |  Enrichment Job      Aggregation Job  |
-      +---------------------------------------+
+      |                   Flink                      |
+      |  Core Funnel &    Streaming     Funnel      |
+      |  Enrichment Job   Aggregation   Metrics Job |
+      +----------------------------------------------+
                          |
                          |
               +----------+----------+
@@ -77,6 +77,12 @@ This starts the infrastructure services (Kafka, MinIO, Iceberg, Flink, Trino, Cl
 
 ```bash
 docker compose --profile generator up --build -d
+```
+
+To backfill historical data (useful for testing hourly window aggregations), set `BACKFILL_HOURS` to generate N hours of historical events at max speed before switching to real-time:
+
+```bash
+BACKFILL_HOURS=3 docker compose --profile generator up --build -d
 ```
 
 Wait for all services to become healthy:
@@ -266,7 +272,7 @@ The workspace is persisted in a Docker volume (`cloudbeaver-workspace`), so subs
 Open [http://localhost:8088](http://localhost:8088) and log in with `admin` / `password`. The setup script creates:
 
 - A Trino database connection
-- Datasets for all 7 tables (core funnel + enriched + aggregations)
+- Datasets for all 8 tables (core funnel + enriched + aggregations + funnel metrics)
 - Charts (visible under Charts):
   - "Bid Requests by Country" -- pie chart of request volume by geo
   - "Bid Responses by Bidder Seat" -- pie chart of responses per bidder
@@ -274,8 +280,9 @@ Open [http://localhost:8088](http://localhost:8088) and log in with `admin` / `p
   - "Clicks by Creative" -- pie chart of click counts per creative
   - "Requests by Device Category" -- pie chart from enriched data (Desktop, Mobile Web, Mobile App, CTV)
   - "Test vs Production Traffic" -- pie chart of test/production split from enriched data
-  - "Hourly Revenue by Bidder" -- pie chart of total revenue by country from hourly aggregations
+  - "Hourly Revenue by Country" -- pie chart of total revenue by country from hourly aggregations
   - "Rolling Win Count by Bidder" -- bar chart of win count and revenue from 5-minute rolling windows
+  - "Funnel Conversion by Publisher" -- bar chart of bid requests/responses/impressions/clicks per publisher
 - An "AdTech Data Lake Test" dashboard with auto-refresh (15s)
 
 You can also use SQL Lab to run ad-hoc queries against Trino.
@@ -333,6 +340,8 @@ bash scripts/setup-generator-local-debug.sh
 
 Use the **"Mock Data Generator"** launch configuration (in `.vscode/launch.json`) to run or debug the generator. It points at `localhost:29092` and includes all funnel rate environment variables. Set breakpoints in `mock-data-gen/src/` and press F5.
 
+To test hourly window aggregations without waiting an hour, use the **"Mock Data Generator (2h Backfill)"** launch configuration instead. It generates 2 hours of historical events at max speed before switching to real-time, so Flink's hourly tumble windows emit results within seconds.
+
 ### Debugging `setup-dashboards.py` (Superset)
 
 The `setup-dashboards.py` script runs inside the Superset container but can be debugged from VS Code using remote attach. The script, along with `superset_config.py` and `bootstrap.sh`, is bind-mounted into the container via `docker-compose.yml`, so local edits are reflected immediately without rebuilding.
@@ -380,7 +389,44 @@ docker compose exec minio mc ls --recursive local/warehouse/db/bid_requests/
 | `TOPIC_CLICKS` | `clicks` | Kafka topic for clicks |
 | `BID_RESPONSE_RATE` | `0.60` | Probability a bid request gets a response (~60% fill rate) |
 | `WIN_RATE` | `0.15` | Probability a bid response wins the auction (~15%) |
-| `CLICK_RATE` | `0.02` | Probability an impression generates a click (~2% CTR) |
+| `CLICK_RATE` | `0.05` | Probability an impression generates a click (~5% CTR) |
+| `BACKFILL_HOURS` | `0` | Generate N hours of historical data at max speed before real-time mode (0 = disabled) |
+
+### Backfill Mode
+
+The Flink streaming aggregations (hourly impressions by geo, funnel metrics by publisher) use 1-hour window buckets. In real-time mode, you'd need to wait a full hour before any aggregated results appear in the Iceberg tables. Backfill mode solves this by generating historical events with timestamps spread across the past N hours, sent at max speed without rate limiting. This causes Flink's watermarks to advance through multiple window boundaries within seconds, producing aggregated results almost immediately.
+
+**How it works:**
+
+1. The generator calculates `EVENTS_PER_SECOND * 3600 * BACKFILL_HOURS` total events
+2. Each event gets a timestamp evenly spaced across the backfill window (e.g., 2 hours ago to now)
+3. All events are sent to Kafka at max speed (no sleep between events)
+4. Flink consumes the historical data, the interval joins match correlated events, and the hourly aggregations produce results
+5. After backfill completes, the generator switches to real-time mode at the configured `EVENTS_PER_SECOND` rate
+
+**Docker:**
+
+```bash
+# 2-hour backfill, then real-time at 10 eps
+BACKFILL_HOURS=2 docker compose --profile generator up --build -d
+
+# Watch backfill progress
+docker compose logs -f mock-data-gen
+```
+
+**VS Code:** Select the **"Mock Data Generator (1h Backfill)"** or **"Mock Data Generator (2h Backfill)"** launch configuration and press F5.
+
+**Verify results after backfill** (wait ~60s for the first Flink checkpoint to commit):
+
+```bash
+# Should show actual country codes (USA, GBR, DEU, etc.)
+docker exec trino trino --execute \
+  "SELECT * FROM iceberg.db.hourly_impressions_by_geo ORDER BY impression_count DESC LIMIT 10"
+
+# Should show funnel metrics per publisher
+docker exec trino trino --execute \
+  "SELECT * FROM iceberg.db.hourly_funnel_by_publisher ORDER BY bid_requests DESC LIMIT 10"
+```
 
 ### Flink Web UI
 
@@ -457,8 +503,10 @@ streaming-data-lake/
       Dockerfile                   # Custom Flink 1.20 image with Iceberg JARs
       submit-sql-job.sh            # Waits for deps, submits SQL job
       sql/
-        create_tables.sql          # Flink SQL DDL (catalogs + source tables)
-        insert_jobs.sql            # Flink SQL DML (streaming insert)
+        create_tables.sql          # Flink SQL DDL (catalogs + source/sink tables)
+        insert_jobs.sql            # Flink SQL DML (streaming inserts)
+        aggregation_jobs.sql       # Windowed aggregations (hourly geo, rolling bidder metrics)
+        funnel_jobs.sql            # 4-way interval join funnel metrics by publisher
   trino/
     catalog/
       iceberg.properties           # Iceberg connector config for Trino

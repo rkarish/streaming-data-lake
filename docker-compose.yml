@@ -83,12 +83,15 @@ services:
       TOPIC_CLICKS: clicks
       BID_RESPONSE_RATE: 0.60
       WIN_RATE: 0.15
-      CLICK_RATE: 0.02
-      # Phase 6: Traffic variation rates for testing stream transformations
+      CLICK_RATE: 0.05
+      # Traffic variation rates for testing stream transformations
       TEST_PUBLISHER_RATE: 0.05
       INVALID_IP_RATE: 0.02
       APP_TRAFFIC_RATE: 0.30
       NON_USD_CURRENCY_RATE: 0.10
+      # Backfill mode - generate N hours of historical data at max speed
+      # before switching to real-time. Set to 0 to disable.
+      BACKFILL_HOURS: ${BACKFILL_HOURS:-0}
     restart: on-failure
 
   trino:

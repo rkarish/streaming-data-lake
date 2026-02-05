@@ -64,7 +64,11 @@ CREATE TEMPORARY TABLE kafka_bid_requests (
         `ext` ROW<`gdpr` INT>
     >,
     `event_timestamp` STRING,
-    `received_at` STRING
+    `received_at` STRING,
+    -- Computed column: parse ISO timestamp string to TIMESTAMP(3)
+    `event_ts` AS TO_TIMESTAMP(SUBSTRING(`event_timestamp`, 1, 26), 'yyyy-MM-dd''T''HH:mm:ss.SSSSSS'),
+    -- Watermark for event-time windowing (5 second tolerance for late data)
+    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '5' SECOND
 ) WITH (
     'connector' = 'kafka',
     'topic' = 'bid-requests',
@@ -96,7 +100,11 @@ CREATE TEMPORARY TABLE kafka_bid_responses (
     `bidid` STRING,
     `cur` STRING,
     `ext` ROW<`request_id` STRING>,
-    `event_timestamp` STRING
+    `event_timestamp` STRING,
+    -- Computed column: parse ISO timestamp string to TIMESTAMP(3)
+    `event_ts` AS TO_TIMESTAMP(SUBSTRING(`event_timestamp`, 1, 26), 'yyyy-MM-dd''T''HH:mm:ss.SSSSSS'),
+    -- Watermark for event-time windowing (5 second tolerance for late data)
+    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '5' SECOND
 ) WITH (
     'connector' = 'kafka',
     'topic' = 'bid-responses',
@@ -145,7 +153,11 @@ CREATE TEMPORARY TABLE kafka_clicks (
     `bidder_id` STRING,
     `creative_id` STRING,
     `click_url` STRING,
-    `event_timestamp` STRING
+    `event_timestamp` STRING,
+    -- Computed column: parse ISO timestamp string to TIMESTAMP(3)
+    `event_ts` AS TO_TIMESTAMP(SUBSTRING(`event_timestamp`, 1, 26), 'yyyy-MM-dd''T''HH:mm:ss.SSSSSS'),
+    -- Watermark for event-time windowing (5 second tolerance for late data)
+    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '5' SECOND
 ) WITH (
     'connector' = 'kafka',
     'topic' = 'clicks',
@@ -203,5 +215,33 @@ CREATE TABLE iceberg_rolling_metrics_by_bidder (
     'catalog-name' = 'iceberg_catalog',
     'catalog-database' = 'db',
     'catalog-table' = 'rolling_metrics_by_bidder',
+    'upsert-enabled' = 'true'
+);
+
+-- 8. Iceberg sink table for hourly_funnel_by_publisher (upsert mode)
+-- Funnel metrics: bid_requests -> bid_responses -> impressions -> clicks
+-- PK: (window_start, publisher_id) matches Iceberg identifier-field-ids
+CREATE TABLE iceberg_hourly_funnel_by_publisher (
+    `window_start` TIMESTAMP(3),
+    `publisher_id` STRING,
+    `bid_requests` BIGINT,
+    `bid_responses` BIGINT,
+    `impressions` BIGINT,
+    `clicks` BIGINT,
+    `fill_rate` DOUBLE,
+    `win_rate` DOUBLE,
+    `ctr` DOUBLE,
+    PRIMARY KEY (`window_start`, `publisher_id`) NOT ENFORCED
+) WITH (
+    'connector' = 'iceberg',
+    'catalog-type' = 'rest',
+    'uri' = 'http://iceberg-rest:8181',
+    'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+    's3.endpoint' = 'http://minio:9000',
+    's3.path-style-access' = 'true',
+    'warehouse' = 's3://warehouse/',
+    'catalog-name' = 'iceberg_catalog',
+    'catalog-database' = 'db',
+    'catalog-table' = 'hourly_funnel_by_publisher',
     'upsert-enabled' = 'true'
 );

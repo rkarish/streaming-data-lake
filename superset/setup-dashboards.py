@@ -3,7 +3,7 @@
 
 Creates:
 - Trino database connection
-- Datasets for all Iceberg tables (core funnel + Phase 6 enriched/aggregation)
+- Datasets for all Iceberg tables (core funnel + enriched/aggregation + funnel metrics)
 - Charts for visualizing the data:
   - Core: Bid requests by country, responses by bidder seat, impressions by bidder, clicks by creative
   - Requests by device category, test vs production traffic, hourly revenue by bidder
@@ -246,7 +246,7 @@ def main():
     get_csrf_token(session)
     database_id = create_database(session)
 
-    # Core funnel tables (Phase 1-5)
+    # Core funnel tables
     ds_bid_requests = create_dataset(session, database_id, "bid_requests")
     ds_bid_responses = create_dataset(session, database_id, "bid_responses")
     ds_impressions = create_dataset(session, database_id, "impressions")
@@ -256,6 +256,9 @@ def main():
     ds_enriched = create_dataset(session, database_id, "bid_requests_enriched")
     ds_hourly_geo = create_dataset(session, database_id, "hourly_impressions_by_geo")
     ds_rolling_bidder = create_dataset(session, database_id, "rolling_metrics_by_bidder")
+
+    # Funnel metrics table
+    ds_funnel = create_dataset(session, database_id, "hourly_funnel_by_publisher")
 
     count_metric = lambda col: {
         "expressionType": "SIMPLE",
@@ -343,8 +346,8 @@ def main():
         "show_legend": True
     })
 
-    # Hourly aggregation chart
-    create_chart(session, "Hourly Revenue by Bidder", "pie", ds_hourly_geo, {
+    # Hourly aggregation chart (uses actual country data from impressions-bid_requests interval join)
+    create_chart(session, "Hourly Revenue by Country", "pie", ds_hourly_geo, {
         "viz_type": "pie",
         "groupby": ["device_geo_country"],
         "metric": sum_metric("total_revenue", "Total Revenue"),
@@ -357,7 +360,7 @@ def main():
     })
 
     # Rolling metrics chart
-    rolling_chart_id = create_chart(session, "Rolling Win Count by Bidder", "echarts_timeseries_bar", ds_rolling_bidder, {
+    create_chart(session, "Rolling Win Count by Bidder", "echarts_timeseries_bar", ds_rolling_bidder, {
         "viz_type": "echarts_timeseries_bar",
         "x_axis": "bidder_id",
         "metrics": [sum_metric("win_count", "Win Count"), sum_metric("revenue", "Revenue")],
@@ -371,12 +374,32 @@ def main():
         "show_legend": True
     })
 
+    # Funnel conversion chart
+    funnel_chart_id = create_chart(session, "Funnel Conversion by Publisher", "echarts_timeseries_bar", ds_funnel, {
+        "viz_type": "echarts_timeseries_bar",
+        "x_axis": "publisher_id",
+        "metrics": [
+            sum_metric("bid_requests", "Bid Requests"),
+            sum_metric("bid_responses", "Bid Responses"),
+            sum_metric("impressions", "Impressions"),
+            sum_metric("clicks", "Clicks")
+        ],
+        "groupby": [],
+        "adhoc_filters": [],
+        "row_limit": 20,
+        "order_desc": True,
+        "x_axis_sort": "Bid Requests",
+        "x_axis_sort_asc": False,
+        "color_scheme": "supersetColors",
+        "show_legend": True
+    })
+
     print("Charts setup complete")
 
     # Dashboard with auto-refresh (15 seconds) -- uses ORM because the REST
     # API does not establish the dashboard-slices relationship.
     create_dashboard_orm("AdTech Data Lake", "adtech-data-lake",
-                         rolling_chart_id, refresh_frequency=15)
+                         funnel_chart_id, refresh_frequency=15)
 
     print("Setup complete")
 

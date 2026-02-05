@@ -9,7 +9,7 @@ set -euo pipefail
 #   2. MinIO bucket (warehouse)
 #   3. Iceberg namespace and tables:
 #      - Core: db.bid_requests, bid_responses, impressions, clicks
-#      - Phase 6: db.bid_requests_enriched, hourly_impressions_by_geo, rolling_metrics_by_bidder
+#      - Enriched/Aggregation: db.bid_requests_enriched, hourly_impressions_by_geo, rolling_metrics_by_bidder
 #   4. Flink streaming job (Kafka -> Iceberg)
 #   5. Trino connectivity verification
 #   6. CloudBeaver readiness check
@@ -256,7 +256,7 @@ else
   exit 1
 fi
 
-# -- 3f: Create table 'bid_requests_enriched' (Phase 6: with device classification and traffic flags) --
+# -- 3f: Create table 'bid_requests_enriched' (with device classification and traffic flags) --
 echo "==> Creating Iceberg table 'db.bid_requests_enriched'..."
 
 enriched_payload='{
@@ -318,7 +318,7 @@ else
   exit 1
 fi
 
-# -- 3g: Create table 'hourly_impressions_by_geo' (Phase 6: upsert aggregation table) --
+# -- 3g: Create table 'hourly_impressions_by_geo' (upsert aggregation table) --
 echo "==> Creating Iceberg table 'db.hourly_impressions_by_geo'..."
 
 geo_agg_payload='{
@@ -359,7 +359,7 @@ else
   exit 1
 fi
 
-# -- 3h: Create table 'rolling_metrics_by_bidder' (Phase 6: upsert aggregation table) --
+# -- 3h: Create table 'rolling_metrics_by_bidder' (upsert aggregation table) --
 echo "==> Creating Iceberg table 'db.rolling_metrics_by_bidder'..."
 
 bidder_agg_payload='{

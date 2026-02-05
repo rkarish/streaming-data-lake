@@ -42,10 +42,10 @@ class Config:
     bid_response_rate: float = float(os.environ.get("BID_RESPONSE_RATE", "0.60"))
     # bid_response -> impression: ~15% win rate (auction clearing)
     win_rate: float = float(os.environ.get("WIN_RATE", "0.15"))
-    # impression -> click: ~2% CTR (click-through rate)
-    click_rate: float = float(os.environ.get("CLICK_RATE", "0.02"))
+    # impression -> click: ~5% CTR (click-through rate)
+    click_rate: float = float(os.environ.get("CLICK_RATE", "0.05"))
 
-    # Traffic variation rates for Phase 6 stream transformations testing
+    # Traffic variation rates for stream transformations testing
     # Rate of test publisher IDs (test-*) for traffic filtering tests
     test_publisher_rate: float = float(os.environ.get("TEST_PUBLISHER_RATE", "0.05"))
     # Rate of RFC1918 private IPs for invalid traffic filtering tests
@@ -54,6 +54,12 @@ class Config:
     app_traffic_rate: float = float(os.environ.get("APP_TRAFFIC_RATE", "0.30"))
     # Rate of non-USD currencies for currency normalization tests
     non_usd_currency_rate: float = float(os.environ.get("NON_USD_CURRENCY_RATE", "0.10"))
+
+    # Backfill mode: generate historical events spanning this many hours before now.
+    # Events are sent at max speed (no rate limiting) with timestamps spread evenly
+    # across the backfill window, then the generator switches to real-time mode.
+    # Set to 0 to disable backfill (default).
+    backfill_hours: int = int(os.environ.get("BACKFILL_HOURS", "0"))
 
 
 # Singleton instance used throughout the application

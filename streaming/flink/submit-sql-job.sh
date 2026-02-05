@@ -44,16 +44,29 @@ echo ""
 echo "Main ingestion job submitted."
 
 # -----------------------------------------------------------------------------
-# Submit aggregation jobs (Phase 6: windowed aggregations)
+# Submit aggregation jobs (windowed aggregations)
 # -----------------------------------------------------------------------------
 if [ -f "${SQL_DIR}/aggregation_jobs.sql" ]; then
     echo ""
-    echo "Submitting aggregation jobs (Phase 6: windowed aggregations)..."
+    echo "Submitting aggregation jobs (windowed aggregations)..."
     cat "${SQL_DIR}/create_tables.sql" "${SQL_DIR}/aggregation_jobs.sql" \
         | /opt/flink/bin/sql-client.sh embedded
     echo "Aggregation jobs submitted."
 else
     echo "No aggregation_jobs.sql found, skipping."
+fi
+
+# -----------------------------------------------------------------------------
+# Submit funnel jobs (4-way interval join funnel metrics)
+# -----------------------------------------------------------------------------
+if [ -f "${SQL_DIR}/funnel_jobs.sql" ]; then
+    echo ""
+    echo "Submitting funnel jobs (funnel metrics aggregation)..."
+    cat "${SQL_DIR}/create_tables.sql" "${SQL_DIR}/funnel_jobs.sql" \
+        | /opt/flink/bin/sql-client.sh embedded
+    echo "Funnel jobs submitted."
+else
+    echo "No funnel_jobs.sql found, skipping."
 fi
 
 echo ""
