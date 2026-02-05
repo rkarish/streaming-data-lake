@@ -906,10 +906,12 @@ GROUP BY
 - **Late data**: Events arriving after the window closes will be dropped; configure allowed lateness if needed
 - **Separate job**: Run as a separate Flink job from the Phase 6 aggregations for independent lifecycle management
 
-### Phase 8: Cloud Readiness
-- Parameterize storage and catalog configs for AWS/GCP
-- Document deployment steps for each cloud
-- CI/CD pipeline for streaming job deployment
+### Forward-Looking
+
+The following areas are candidates for future design phases:
+
+- **Cloud Readiness**: Parameterize storage and catalog configs for AWS/GCP, document deployment steps for each cloud, CI/CD pipeline for streaming job deployment
+- Additional phases TBD
 
 ## 12. References
 

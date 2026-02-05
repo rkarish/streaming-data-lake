@@ -379,16 +379,16 @@ def main():
         "viz_type": "echarts_timeseries_bar",
         "x_axis": "publisher_id",
         "metrics": [
-            sum_metric("bid_requests", "Bid Requests"),
-            sum_metric("bid_responses", "Bid Responses"),
+            sum_metric("clicks", "Clicks"),
             sum_metric("impressions", "Impressions"),
-            sum_metric("clicks", "Clicks")
+            sum_metric("bid_responses", "Bid Responses"),
+            sum_metric("bid_requests", "Bid Requests")
         ],
         "groupby": [],
         "adhoc_filters": [],
         "row_limit": 20,
         "order_desc": True,
-        "x_axis_sort": "Bid Requests",
+        "x_axis_sort": "Bid Responses",
         "x_axis_sort_asc": False,
         "color_scheme": "supersetColors",
         "show_legend": True

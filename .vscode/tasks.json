@@ -2,6 +2,20 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "reload-system",
+            "type": "shell",
+            "command": "docker compose down && docker compose up -d && bash scripts/setup.sh",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "superset-debug-script",
             "type": "shell",
             "command": "docker exec -e ENABLE_DEBUGGER=true -e PYTHONUNBUFFERED=1 superset python /app/setup-dashboards.py",
