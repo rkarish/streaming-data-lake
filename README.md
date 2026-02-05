@@ -10,11 +10,12 @@ See [`.design/adtech-data-lake-streaming-platform.md`](.design/adtech-data-lake-
 Mock Data Gen  --->  Kafka (KRaft)
                          |
                          v
-      +---------------------------------------+
-      |                   Flink                      |
-      |  Core Funnel &    Streaming     Funnel      |
-      |  Enrichment Job   Aggregation   Metrics Job |
-      +----------------------------------------------+
+    +----------------------------------------------+
+    |                   Flink                      |   
+    |                                              |
+    |  Core Funnel &    Streaming     Funnel       |
+    |  Enrichment Job   Aggregation   Metrics Job  |
+    +----------------------------------------------+
                          |
                          |
               +----------+----------+
