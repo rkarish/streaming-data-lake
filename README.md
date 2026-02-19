@@ -1,17 +1,21 @@
 # AdTech Data Lake Streaming Platform
 
-A data lake streaming platform for adtech that produces a full OpenRTB 2.6 event funnel (bid requests, bid responses, impressions, clicks) to Apache Kafka, streams them through Apache Flink, and stores them in Apache Iceberg tables backed by MinIO (S3-compatible) object storage. Includes Trino as the SQL query engine, CloudBeaver as a web-based SQL IDE, and Apache Superset for dashboards and visualization.
+A data lake streaming platform for adtech that produces a full OpenRTB 2.6 event funnel (bid requests, bid responses, impressions, clicks) as Avro-serialized messages to Apache Kafka (with Confluent Schema Registry for schema governance and evolution), streams them through Apache Flink, and stores them in Apache Iceberg tables backed by MinIO (S3-compatible) object storage. Includes Trino as the SQL query engine, CloudBeaver as a web-based SQL IDE, and Apache Superset for dashboards and visualization.
 
 See [`.design/adtech-data-lake-streaming-platform.md`](.design/adtech-data-lake-streaming-platform.md) for the full design document.
 
 ## Architecture
 
 ```
-Mock Data Gen  --->  Kafka (KRaft)
+                    Schema Registry
+                     (Avro schemas)
+                         ^
                          |
+Mock Data Gen  --->  Kafka (KRaft)
+   (Avro)                |
                          v
     +----------------------------------------------+
-    |                   Flink                      |   
+    |                   Flink                      |
     |                                              |
     |  Core Funnel &    Streaming     Funnel       |
     |  Enrichment Job   Aggregation   Metrics Job  |
@@ -40,9 +44,10 @@ Mock Data Gen  --->  Kafka (KRaft)
 | Service | Image | Ports |
 |---|---|---|
 | `kafka` | `apache/kafka:3.8.1` (KRaft) | 29092 (host), 9092 (internal) |
+| `schema-registry` | `confluentinc/cp-schema-registry:7.8.0` | 8082 |
 | `minio` | `minio/minio:latest` | 9000 (S3), 9001 (console) |
-| `iceberg-rest` | `tabulario/iceberg-rest:0.10.0` | 8181 |
-| `mock-data-gen` | Custom (Python 3.12) | -- |
+| `iceberg-rest` | `tabulario/iceberg-rest:1.6.0` | 8181 |
+| `mock-data-gen` | Custom (Python 3.12, Avro) | -- |
 | `flink-jobmanager` | Custom (Flink 1.20 + Iceberg) | 8081 (Web UI) |
 | `flink-taskmanager` | Custom (Flink 1.20 + Iceberg) | -- |
 | `trino` | `trinodb/trino:467` | 8080 (Web UI) |
@@ -75,7 +80,7 @@ claude plugin install voltagent-data-ai
 docker compose up --build -d
 ```
 
-This starts the infrastructure services (Kafka, MinIO, Iceberg, Flink, Trino, CloudBeaver, Superset) but **not** the mock data generator. To also start the generator (continuous event stream):
+This starts the infrastructure services (Kafka, Schema Registry, MinIO, Iceberg, Flink, Trino, CloudBeaver, Superset) but **not** the mock data generator. To also start the generator (continuous event stream):
 
 ```bash
 docker compose --profile generator up --build -d
@@ -95,7 +100,7 @@ docker compose ps
 
 ### 2. Run the setup script
 
-Creates the Kafka topics, MinIO bucket, Iceberg namespace + tables, submits the Flink streaming job, and verifies Trino connectivity:
+Waits for Schema Registry, configures BACKWARD compatibility, creates Kafka topics, MinIO bucket, Iceberg namespace + tables, submits the Flink streaming job, and verifies Trino connectivity:
 
 ```bash
 bash scripts/setup.sh
@@ -103,14 +108,12 @@ bash scripts/setup.sh
 
 ### 3. Verify
 
-Check that events are flowing through Kafka (4 topics: `bid-requests`, `bid-responses`, `impressions`, `clicks`):
+Check that events are flowing through Kafka. Messages are Avro-encoded (binary), so `kafka-console-consumer` will show raw bytes. To verify message count, check topic offsets instead:
 
 ```bash
-docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+docker compose exec kafka /opt/kafka/bin/kafka-get-offsets.sh \
   --bootstrap-server localhost:9092 \
-  --topic bid-requests \
-  --from-beginning \
-  --max-messages 3
+  --topic bid-requests
 ```
 
 Verify the Flink job is running:
@@ -151,25 +154,7 @@ docker compose logs mock-data-gen --tail 20
 
 ### 4. Read data from Kafka
 
-Consume a few messages from any topic (replace `bid-requests` with `bid-responses`, `impressions`, or `clicks`):
-
-```bash
-docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:9092 \
-  --topic bid-requests \
-  --from-beginning \
-  --max-messages 5
-```
-
-Pipe through `python3` for pretty-printed JSON:
-
-```bash
-docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:9092 \
-  --topic bid-requests \
-  --from-beginning \
-  --max-messages 1 | python3 -m json.tool
-```
+Messages are Avro-encoded with Confluent Schema Registry wire format (magic byte + 4-byte schema ID + Avro binary). The standard `kafka-console-consumer` will show raw binary. To inspect messages, use topic offsets or query the data via Trino after it lands in Iceberg.
 
 Check topic offsets (total message count per partition):
 
@@ -179,12 +164,14 @@ docker compose exec kafka /opt/kafka/bin/kafka-get-offsets.sh \
   --topic bid-requests
 ```
 
-Tail new messages in real time (Ctrl+C to stop):
+Verify schemas are registered in Schema Registry:
 
 ```bash
-docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:9092 \
-  --topic bid-requests
+# List all registered subjects
+curl -s http://localhost:8082/subjects | python3 -m json.tool
+
+# View the latest schema for a topic
+curl -s http://localhost:8082/subjects/bid-requests-value/versions/latest | python3 -m json.tool
 ```
 
 ### 5. Query the Iceberg table (Flink SQL)
@@ -313,7 +300,7 @@ You can debug the mock data generator locally in VS Code while keeping the infra
 
 ```bash
 docker compose build flink-jobmanager flink-taskmanager
-docker compose up kafka minio iceberg-rest trino flink-jobmanager flink-taskmanager -d
+docker compose up kafka schema-registry minio iceberg-rest trino flink-jobmanager flink-taskmanager -d
 ```
 
 Wait for all services to become healthy:
@@ -324,7 +311,7 @@ docker compose ps
 
 ### 2. Run the setup script
 
-Creates the Kafka topics, MinIO bucket, Iceberg namespace + tables, submits the Flink streaming job, and verifies Trino connectivity:
+Waits for Schema Registry, configures BACKWARD compatibility, creates Kafka topics, MinIO bucket, Iceberg namespace + tables, submits the Flink streaming job, and verifies Trino connectivity:
 
 ```bash
 bash scripts/setup.sh
@@ -437,6 +424,7 @@ Run any task via **Terminal > Run Task...** (or `Cmd+Shift+P` > "Tasks: Run Task
 | Variable | Default | Description |
 |---|---|---|
 | `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` (Docker) / `localhost:29092` (local) | Kafka broker address |
+| `SCHEMA_REGISTRY_URL` | `http://schema-registry:8081` (Docker) / `http://localhost:8082` (local) | Confluent Schema Registry URL for Avro serialization |
 | `EVENTS_PER_SECOND` | `10` | Target bid-request throughput |
 | `TOPIC_BID_REQUESTS` | `bid-requests` | Kafka topic for bid requests |
 | `TOPIC_BID_RESPONSES` | `bid-responses` | Kafka topic for bid responses |
@@ -523,6 +511,23 @@ mc ls --recursive local/warehouse/db/bid_requests/
 
 Access the MinIO web console at [http://localhost:9001](http://localhost:9001) with credentials `admin` / `password`. From the console you can browse the `warehouse` bucket, navigate into `db/<table_name>/` directories, and inspect or download individual Parquet and Iceberg metadata files.
 
+### Schema Registry
+
+The Confluent Schema Registry provides Avro schema governance with BACKWARD compatibility enforcement. The API is available at [http://localhost:8082](http://localhost:8082).
+
+```bash
+# List all registered subjects
+curl -s http://localhost:8082/subjects | python3 -m json.tool
+
+# View the latest schema for a topic
+curl -s http://localhost:8082/subjects/bid-requests-value/versions/latest | python3 -m json.tool
+
+# Check global compatibility level
+curl -s http://localhost:8082/config | python3 -m json.tool
+```
+
+Avro schema files (`.avsc`) are in `schemas/avro/` and are bind-mounted into the mock data generator container.
+
 ### Iceberg REST Catalog
 
 The catalog API is available at [http://localhost:8181](http://localhost:8181). List tables:
@@ -546,6 +551,12 @@ streaming-data-lake/
   .design/
     adtech-streaming-platform.md   # Design document
   docker-compose.yml               # All local services
+  schemas/
+    avro/
+      bid_request.avsc             # Avro schema for bid requests
+      bid_response.avsc            # Avro schema for bid responses
+      impression.avsc              # Avro schema for impressions
+      click.avsc                   # Avro schema for clicks
   mock-data-gen/
     pyproject.toml                 # Python dependencies
     Dockerfile                     # Container image
@@ -574,7 +585,7 @@ streaming-data-lake/
     bootstrap.sh                   # DB migration, admin creation, server start
     setup-dashboards.py            # REST API script to create dashboards
   scripts/
-    setup.sh                       # Initialize 4 topics, bucket, 4 tables, Flink job, verify Trino, setup dashboards
+    setup.sh                       # Schema Registry, 4 topics, bucket, 7 tables, Flink jobs, verify Trino, setup dashboards
     setup-generator-local-debug.sh # Set up local .venv for debugging the generator
     query-examples.sh              # Sample analytical queries via Trino
     maintenance.sh                 # Iceberg table maintenance for all 4 tables (compaction, expiry, cleanup)
