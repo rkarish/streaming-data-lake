@@ -16,7 +16,9 @@
         "TOPIC_CLICKS": "clicks",
         "BID_RESPONSE_RATE": "0.60",
         "WIN_RATE": "0.15",
-        "CLICK_RATE": "0.05"
+        "CLICK_RATE": "0.05",
+        "AVRO_SCHEMA_DIR": "${workspaceFolder}/schemas/avro",
+        "SCHEMA_REGISTRY_URL": "http://localhost:8082"
       },
       "console": "integratedTerminal"
     },
@@ -36,7 +38,9 @@
         "BID_RESPONSE_RATE": "0.60",
         "WIN_RATE": "0.15",
         "CLICK_RATE": "0.05",
-        "BACKFILL_HOURS": "1"
+        "BACKFILL_HOURS": "1",
+        "AVRO_SCHEMA_DIR": "${workspaceFolder}/schemas/avro",
+        "SCHEMA_REGISTRY_URL": "http://localhost:8082"
       },
       "console": "integratedTerminal"
     },
@@ -56,7 +60,9 @@
         "BID_RESPONSE_RATE": "0.60",
         "WIN_RATE": "0.15",
         "CLICK_RATE": "0.05",
-        "BACKFILL_HOURS": "2"
+        "BACKFILL_HOURS": "2",
+        "AVRO_SCHEMA_DIR": "${workspaceFolder}/schemas/avro",
+        "SCHEMA_REGISTRY_URL": "http://localhost:8082"
       },
       "console": "integratedTerminal"
     },

@@ -86,7 +86,7 @@
         {
             "label": "backfill-data-1h",
             "type": "shell",
-            "command": "BACKFILL_HOURS=1 docker compose --profile generator up -d mock-data-gen",
+            "command": "BACKFILL_HOURS=1 docker compose --profile generator up -d --build --force-recreate mock-data-gen",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
