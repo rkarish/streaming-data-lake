@@ -96,12 +96,12 @@ def create_producers() -> dict[str, SerializingProducer]:
 
     key_serializer = StringSerializer("utf_8")
     producers = {}
-    delay = 1.0
     max_delay = 30.0
     max_retries = 10
 
     for topic, schema_file in topic_schemas.items():
         avro_serializer = _load_avro_serializer(schema_file, registry_client)
+        delay = 1.0
         for attempt in range(1, max_retries + 1):
             try:
                 producer = SerializingProducer({
