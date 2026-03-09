@@ -9,6 +9,7 @@ set -euo pipefail
 # =============================================================================
 
 SQL_DIR="/opt/flink/sql"
+TMP_SQL_OUT="/tmp/flink-sql-submit.out"
 
 # -----------------------------------------------------------------------------
 # Wait for a TCP endpoint to become reachable
@@ -33,12 +34,24 @@ echo ""
 echo "All dependencies are reachable. Submitting Flink SQL job..."
 echo ""
 
+run_sql_bundle() {
+    local label="$1"
+    shift
+    local files=("$@")
+    echo "${label}"
+    cat "${files[@]}" | /opt/flink/bin/sql-client.sh embedded | tee "${TMP_SQL_OUT}"
+    if grep -q "\[ERROR\]" "${TMP_SQL_OUT}"; then
+        echo "SQL submission failed for: ${label}"
+        return 1
+    fi
+}
+
 # -----------------------------------------------------------------------------
 # Submit main ingestion job via embedded SQL Client
 # -----------------------------------------------------------------------------
-echo "Submitting main ingestion job (Kafka -> Iceberg)..."
-cat "${SQL_DIR}/create_tables.sql" "${SQL_DIR}/insert_jobs.sql" \
-    | /opt/flink/bin/sql-client.sh embedded
+run_sql_bundle \
+    "Submitting main ingestion job (Kafka -> Iceberg)..." \
+    "${SQL_DIR}/create_tables.sql" "${SQL_DIR}/insert_jobs.sql"
 
 echo ""
 echo "Main ingestion job submitted."
@@ -48,9 +61,9 @@ echo "Main ingestion job submitted."
 # -----------------------------------------------------------------------------
 if [ -f "${SQL_DIR}/aggregation_jobs.sql" ]; then
     echo ""
-    echo "Submitting aggregation jobs (windowed aggregations)..."
-    cat "${SQL_DIR}/create_tables.sql" "${SQL_DIR}/aggregation_jobs.sql" \
-        | /opt/flink/bin/sql-client.sh embedded
+    run_sql_bundle \
+        "Submitting aggregation jobs (windowed aggregations)..." \
+        "${SQL_DIR}/create_tables.sql" "${SQL_DIR}/aggregation_jobs.sql"
     echo "Aggregation jobs submitted."
 else
     echo "No aggregation_jobs.sql found, skipping."
@@ -61,9 +74,9 @@ fi
 # -----------------------------------------------------------------------------
 if [ -f "${SQL_DIR}/funnel_jobs.sql" ]; then
     echo ""
-    echo "Submitting funnel jobs (funnel metrics aggregation)..."
-    cat "${SQL_DIR}/create_tables.sql" "${SQL_DIR}/funnel_jobs.sql" \
-        | /opt/flink/bin/sql-client.sh embedded
+    run_sql_bundle \
+        "Submitting funnel jobs (funnel metrics aggregation)..." \
+        "${SQL_DIR}/create_tables.sql" "${SQL_DIR}/funnel_jobs.sql"
     echo "Funnel jobs submitted."
 else
     echo "No funnel_jobs.sql found, skipping."

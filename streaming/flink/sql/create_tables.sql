@@ -67,8 +67,8 @@ CREATE TEMPORARY TABLE kafka_bid_requests (
     `received_at` STRING,
     -- Computed column: parse ISO timestamp string to TIMESTAMP(3)
     `event_ts` AS TO_TIMESTAMP(SUBSTRING(`event_timestamp`, 1, 26), 'yyyy-MM-dd''T''HH:mm:ss.SSSSSS'),
-    -- Watermark for event-time windowing (5 second tolerance for late data)
-    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '5' SECOND
+    -- Watermark for event-time windowing (30 second tolerance for late data)
+    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '30' SECOND
 ) WITH (
     'connector' = 'kafka',
     'topic' = 'bid-requests',
@@ -102,8 +102,8 @@ CREATE TEMPORARY TABLE kafka_bid_responses (
     `event_timestamp` STRING,
     -- Computed column: parse ISO timestamp string to TIMESTAMP(3)
     `event_ts` AS TO_TIMESTAMP(SUBSTRING(`event_timestamp`, 1, 26), 'yyyy-MM-dd''T''HH:mm:ss.SSSSSS'),
-    -- Watermark for event-time windowing (5 second tolerance for late data)
-    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '5' SECOND
+    -- Watermark for event-time windowing (30 second tolerance for late data)
+    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '30' SECOND
 ) WITH (
     'connector' = 'kafka',
     'topic' = 'bid-responses',
@@ -128,8 +128,8 @@ CREATE TEMPORARY TABLE kafka_impressions (
     `event_timestamp` STRING,
     -- Computed column: parse ISO timestamp string to TIMESTAMP(3)
     `event_ts` AS TO_TIMESTAMP(SUBSTRING(`event_timestamp`, 1, 26), 'yyyy-MM-dd''T''HH:mm:ss.SSSSSS'),
-    -- Watermark for event-time windowing (5 second tolerance for late data)
-    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '5' SECOND
+    -- Watermark for event-time windowing (30 second tolerance for late data)
+    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '30' SECOND
 ) WITH (
     'connector' = 'kafka',
     'topic' = 'impressions',
@@ -152,8 +152,8 @@ CREATE TEMPORARY TABLE kafka_clicks (
     `event_timestamp` STRING,
     -- Computed column: parse ISO timestamp string to TIMESTAMP(3)
     `event_ts` AS TO_TIMESTAMP(SUBSTRING(`event_timestamp`, 1, 26), 'yyyy-MM-dd''T''HH:mm:ss.SSSSSS'),
-    -- Watermark for event-time windowing (5 second tolerance for late data)
-    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '5' SECOND
+    -- Watermark for event-time windowing (30 second tolerance for late data)
+    WATERMARK FOR `event_ts` AS `event_ts` - INTERVAL '30' SECOND
 ) WITH (
     'connector' = 'kafka',
     'topic' = 'clicks',
@@ -238,5 +238,120 @@ CREATE TABLE iceberg_hourly_funnel_by_publisher (
     'catalog-name' = 'iceberg_catalog',
     'catalog-database' = 'db',
     'catalog-table' = 'hourly_funnel_by_publisher',
+    'upsert-enabled' = 'true'
+);
+
+-- 9. Iceberg sink table for dq_event_quality_hourly (upsert mode)
+-- PK: (window_start)
+CREATE TABLE iceberg_dq_event_quality_hourly (
+    `window_start` TIMESTAMP(3),
+    `total_bid_requests` BIGINT,
+    `unique_bid_requests` BIGINT,
+    `duplicate_bid_requests` BIGINT,
+    `duplicate_bid_request_rate` DOUBLE,
+    `total_bid_responses` BIGINT,
+    `unique_bid_responses` BIGINT,
+    `duplicate_bid_responses` BIGINT,
+    `duplicate_bid_response_rate` DOUBLE,
+    `total_wins` BIGINT,
+    `unique_wins` BIGINT,
+    `duplicate_wins` BIGINT,
+    `duplicate_win_rate` DOUBLE,
+    `total_clicks` BIGINT,
+    `unique_clicks` BIGINT,
+    `duplicate_clicks` BIGINT,
+    `duplicate_click_rate` DOUBLE,
+    `invalid_bid_requests` BIGINT,
+    `invalid_bid_request_rate` DOUBLE,
+    `total_events_all` BIGINT,
+    `duplicate_events_all` BIGINT,
+    `duplicate_rate_all` DOUBLE,
+    PRIMARY KEY (`window_start`) NOT ENFORCED
+) WITH (
+    'connector' = 'iceberg',
+    'catalog-type' = 'rest',
+    'uri' = 'http://iceberg-rest:8181',
+    'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+    's3.endpoint' = 'http://minio:9000',
+    's3.path-style-access' = 'true',
+    'warehouse' = 's3://warehouse/',
+    'catalog-name' = 'iceberg_catalog',
+    'catalog-database' = 'db',
+    'catalog-table' = 'dq_event_quality_hourly',
+    'upsert-enabled' = 'true'
+);
+
+-- 10. Iceberg sink table for bid_landscape_hourly (upsert mode)
+-- PK: (window_start, publisher_id)
+CREATE TABLE iceberg_bid_landscape_hourly (
+    `window_start` TIMESTAMP(3),
+    `publisher_id` STRING,
+    `request_count` BIGINT,
+    `total_bids` BIGINT,
+    `bids_per_request` DOUBLE,
+    `avg_bid_price` DOUBLE,
+    `max_bid_price` DOUBLE,
+    PRIMARY KEY (`window_start`, `publisher_id`) NOT ENFORCED
+) WITH (
+    'connector' = 'iceberg',
+    'catalog-type' = 'rest',
+    'uri' = 'http://iceberg-rest:8181',
+    'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+    's3.endpoint' = 'http://minio:9000',
+    's3.path-style-access' = 'true',
+    'warehouse' = 's3://warehouse/',
+    'catalog-name' = 'iceberg_catalog',
+    'catalog-database' = 'db',
+    'catalog-table' = 'bid_landscape_hourly',
+    'upsert-enabled' = 'true'
+);
+
+-- 11. Iceberg sink table for realtime_serving_metrics_1m (upsert mode)
+-- PK: (window_start, bidder_id)
+CREATE TABLE iceberg_realtime_serving_metrics_1m (
+    `window_start` TIMESTAMP(3),
+    `bidder_id` STRING,
+    `impressions` BIGINT,
+    `clicks` BIGINT,
+    `revenue` DOUBLE,
+    `ctr` DOUBLE,
+    PRIMARY KEY (`window_start`, `bidder_id`) NOT ENFORCED
+) WITH (
+    'connector' = 'iceberg',
+    'catalog-type' = 'rest',
+    'uri' = 'http://iceberg-rest:8181',
+    'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+    's3.endpoint' = 'http://minio:9000',
+    's3.path-style-access' = 'true',
+    'warehouse' = 's3://warehouse/',
+    'catalog-name' = 'iceberg_catalog',
+    'catalog-database' = 'db',
+    'catalog-table' = 'realtime_serving_metrics_1m',
+    'upsert-enabled' = 'true'
+);
+
+-- 12. Iceberg sink table for funnel_leakage_hourly (upsert mode)
+-- PK: (window_start, publisher_id)
+CREATE TABLE iceberg_funnel_leakage_hourly (
+    `window_start` TIMESTAMP(3),
+    `publisher_id` STRING,
+    `requests_no_response` BIGINT,
+    `responses_no_impression` BIGINT,
+    `impressions_no_click` BIGINT,
+    `response_leakage_rate` DOUBLE,
+    `impression_leakage_rate` DOUBLE,
+    `click_leakage_rate` DOUBLE,
+    PRIMARY KEY (`window_start`, `publisher_id`) NOT ENFORCED
+) WITH (
+    'connector' = 'iceberg',
+    'catalog-type' = 'rest',
+    'uri' = 'http://iceberg-rest:8181',
+    'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+    's3.endpoint' = 'http://minio:9000',
+    's3.path-style-access' = 'true',
+    'warehouse' = 's3://warehouse/',
+    'catalog-name' = 'iceberg_catalog',
+    'catalog-database' = 'db',
+    'catalog-table' = 'funnel_leakage_hourly',
     'upsert-enabled' = 'true'
 );

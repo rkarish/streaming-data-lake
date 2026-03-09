@@ -14,7 +14,20 @@ set -euo pipefail
 
 TRINO="docker exec trino trino --catalog iceberg --schema db"
 
-for table in bid_requests bid_responses impressions clicks; do
+for table in \
+  bid_requests \
+  bid_responses \
+  impressions \
+  clicks \
+  bid_requests_enriched \
+  hourly_impressions_by_geo \
+  rolling_metrics_by_bidder \
+  hourly_funnel_by_publisher \
+  dq_rejected_events \
+  dq_event_quality_hourly \
+  bid_landscape_hourly \
+  realtime_serving_metrics_1m \
+  funnel_leakage_hourly; do
   echo "==> Starting Iceberg table maintenance for 'db.${table}'..."
 
   echo ""

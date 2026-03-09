@@ -1113,6 +1113,138 @@ LIMIT 10;
 | `streaming/flink/sql/insert_jobs.sql` | No changes required (column mappings unchanged) |
 | `docker-compose.yml` | Update schema-registry port mapping; mount `schemas/avro/` into mock-data-gen container |
 
+### Phase 9: Data Quality, Auction Fidelity, and Real-Time Optimization
+
+Phase 9 unifies three complementary goals into one implementation:
+
+1. **Data quality hardening** -- explicit validation, rejection paths, and quality KPIs
+2. **Auction fidelity** -- full cardinality handling for OpenRTB arrays (`imp[]`, `seatbid[]`, `bid[]`) and more complete event semantics
+3. **Real-time optimization** -- lower-latency and higher-trust serving tables for dashboards and operational monitoring
+
+#### 9.1 Objectives
+
+- Preserve full auction structure from OpenRTB events instead of first-element flattening only
+- Prevent duplicate/replayed events from inflating funnel metrics
+- Improve late-data handling and event-time correctness for joins/windows
+- Reduce per-record parsing overhead in Flink SQL
+- Surface bad records and quality regressions as queryable datasets
+- Optimize Iceberg table lifecycle for both append and upsert-heavy workloads
+
+#### 9.2 Data Model Enhancements
+
+Add and standardize fields across core events where available:
+
+- **Provenance/correlation**: `source_tid`, extended `request_id` lineage fields
+- **Privacy/compliance**: explicit consent/region policy fields (`gdpr`, `coppa`, `us_privacy` when present)
+- **Quality metadata**: `is_duplicate`, `is_late`, `dq_status`, `dq_reason`
+- **Ingestion metadata**: `ingested_at`, `event_lag_ms`, optional producer version tags
+
+Timestamp model improvements:
+
+- Migrate event timestamps from free-form string fields to Avro logical timestamp types (`timestamp-millis`) to avoid repeated parsing logic in Flink SQL
+- Keep compatibility by introducing new fields first, then deprecating legacy string timestamp columns once all jobs are migrated
+
+#### 9.3 Flink SQL Functional Enhancements
+
+##### 9.3.1 Full Cardinality Processing
+
+Replace first-element array extraction with `UNNEST` patterns:
+
+- `bid_requests`: expand `imp[]` to produce one row per request-impression pair
+- `bid_responses`: expand `seatbid[]` then nested `bid[]` to preserve multi-bid auctions
+
+This enables:
+- accurate bid density and competition metrics
+- better request-to-response matching at impression granularity
+
+##### 9.3.2 Deduplication and Idempotency
+
+Introduce deterministic dedup views/tables using stable IDs and event-time ordering:
+
+- `request_id` for bid requests
+- `response_id` for bid responses
+- `impression_id` for impressions
+- `click_id` for clicks
+
+Pattern:
+- compute `ROW_NUMBER() OVER (PARTITION BY id ORDER BY event_time DESC, ingested_at DESC)`
+- keep only row number = 1 for downstream joins and aggregates
+
+##### 9.3.3 Watermarks and Late Data Strategy
+
+- Increase watermark tolerance based on funnel stage latency expectations
+- Add explicit late-event classification and routing:
+  - accepted-on-time stream/table
+  - late-but-retained stream/table
+  - too-late rejection stream/table
+
+##### 9.3.4 Dimension and Lookup Enrichment
+
+Add temporal lookup joins for frequently changing dimensions:
+
+- bidder dimension (seat metadata, partner tier)
+- publisher/site/app dimension (ownership, vertical)
+- geo and currency reference dimensions (for normalized analytics)
+
+#### 9.4 New Quality and Operational Tables
+
+Add new Iceberg tables for observability and trust:
+
+| Table | Type | Purpose |
+|---|---|---|
+| `dq_rejected_events` | Append | Records dropped/quarantined events with reason codes |
+| `dq_event_quality_hourly` | Upsert | Hourly quality KPIs (invalid rate, duplicate rate, late rate) |
+| `funnel_leakage_hourly` | Upsert | Stage-to-stage drop-off with reason segmentation |
+| `bid_landscape_hourly` | Upsert | Auction competitiveness metrics (bids per request, spread, win distribution) |
+| `realtime_serving_metrics_1m` | Upsert | 1-minute operational metrics for low-latency dashboards |
+
+#### 9.5 Query Layer and Dashboard Enhancements
+
+Add curated serving queries/datasets for:
+
+- end-to-end funnel with quality-adjusted denominators
+- duplicate and late-event trend monitoring
+- auction competitiveness by publisher, bidder, format, and geo
+- near-real-time health panels (1-minute and 5-minute windows)
+
+Superset updates:
+- add datasets for all new Phase 9 tables
+- add data quality dashboard panels with threshold indicators
+- add auction dynamics panels (bid depth, spread, outlier bidders)
+
+#### 9.6 Iceberg Maintenance and Performance Strategy
+
+Extend maintenance coverage beyond the 4 core append tables:
+
+- include enriched, aggregation, funnel, and Phase 9 quality/serving tables
+- table-specific maintenance policies:
+  - append-heavy raw tables: larger compaction targets
+  - upsert-heavy tables: more frequent optimize/cleanup due to equality deletes
+- define tiered retention windows:
+  - raw and rejected events (longer forensic retention)
+  - high-frequency serving aggregates (shorter retention)
+
+#### 9.7 Rollout Plan
+
+1. Add schema fields and compatibility-safe defaults in Avro subjects
+2. Introduce dedup and cardinality-preserving staging views/tables
+3. Cut over aggregate and funnel jobs to deduped/canonical inputs
+4. Launch quality and leakage tables, then wire dashboards and alerts
+5. Tune watermark/state/maintenance settings based on observed lag and file growth
+
+#### 9.8 Modified Files Summary
+
+| File | Changes |
+|---|---|
+| `mock-data-gen/src/generator.py` | Populate ingestion metadata and producer/version markers |
+| `streaming/flink/sql/create_tables.sql` | Add Phase 9 source/sink/quality table DDLs and lookup table definitions |
+| `streaming/flink/sql/insert_jobs.sql` | Replace first-element flattening with `UNNEST` and canonical inserts |
+| `streaming/flink/sql/aggregation_jobs.sql` | Repoint aggregates to deduped canonical streams and add 1-minute serving metrics |
+| `streaming/flink/sql/funnel_jobs.sql` | Add quality-aware funnel logic and leakage outputs |
+| `scripts/setup.sh` | Create new Iceberg tables and submit expanded Flink SQL jobs |
+| `scripts/query-examples.sh` | Add quality, leakage, and auction-fidelity analytical queries |
+| `scripts/maintenance.sh` | Include all enriched, aggregation, funnel, and Phase 9 tables with policy-specific maintenance |
+
 ### Forward-Looking
 
 The following areas are candidates for future design phases:

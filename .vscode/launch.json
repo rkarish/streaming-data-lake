@@ -17,6 +17,10 @@
         "BID_RESPONSE_RATE": "0.60",
         "WIN_RATE": "0.15",
         "CLICK_RATE": "0.05",
+        "DUPLICATE_BID_REQUEST_RATE": "0.01",
+        "DUPLICATE_BID_RESPONSE_RATE": "0.01",
+        "DUPLICATE_IMPRESSION_RATE": "0.01",
+        "DUPLICATE_CLICK_RATE": "0.01",
         "AVRO_SCHEMA_DIR": "${workspaceFolder}/schemas/avro",
         "SCHEMA_REGISTRY_URL": "http://localhost:8082"
       },
@@ -38,6 +42,10 @@
         "BID_RESPONSE_RATE": "0.60",
         "WIN_RATE": "0.15",
         "CLICK_RATE": "0.05",
+        "DUPLICATE_BID_REQUEST_RATE": "0.01",
+        "DUPLICATE_BID_RESPONSE_RATE": "0.01",
+        "DUPLICATE_IMPRESSION_RATE": "0.01",
+        "DUPLICATE_CLICK_RATE": "0.01",
         "BACKFILL_HOURS": "1",
         "AVRO_SCHEMA_DIR": "${workspaceFolder}/schemas/avro",
         "SCHEMA_REGISTRY_URL": "http://localhost:8082"
@@ -60,6 +68,10 @@
         "BID_RESPONSE_RATE": "0.60",
         "WIN_RATE": "0.15",
         "CLICK_RATE": "0.05",
+        "DUPLICATE_BID_REQUEST_RATE": "0.01",
+        "DUPLICATE_BID_RESPONSE_RATE": "0.01",
+        "DUPLICATE_IMPRESSION_RATE": "0.01",
+        "DUPLICATE_CLICK_RATE": "0.01",
         "BACKFILL_HOURS": "2",
         "AVRO_SCHEMA_DIR": "${workspaceFolder}/schemas/avro",
         "SCHEMA_REGISTRY_URL": "http://localhost:8082"

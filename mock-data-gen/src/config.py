@@ -22,6 +22,8 @@ class Config:
         bid_response_rate: Probability (0-1) that a bid request receives a response
         win_rate: Probability (0-1) that a bid response wins the auction
         click_rate: Probability (0-1) that an impression generates a click
+        duplicate_*_rate: Probability (0-1) to emit one extra duplicate record
+            for each emitted event type
     """
 
     # Kafka connection settings
@@ -48,6 +50,20 @@ class Config:
     win_rate: float = float(os.environ.get("WIN_RATE", "0.15"))
     # impression -> click: ~5% CTR (click-through rate)
     click_rate: float = float(os.environ.get("CLICK_RATE", "0.05"))
+
+    # Duplicate injection rates for testing dedup/idempotency in stream processing
+    # Each rate controls the probability of producing one extra duplicate copy
+    # of an emitted event with the same key and payload.
+    duplicate_bid_request_rate: float = float(
+        os.environ.get("DUPLICATE_BID_REQUEST_RATE", "0.00")
+    )
+    duplicate_bid_response_rate: float = float(
+        os.environ.get("DUPLICATE_BID_RESPONSE_RATE", "0.00")
+    )
+    duplicate_impression_rate: float = float(
+        os.environ.get("DUPLICATE_IMPRESSION_RATE", "0.00")
+    )
+    duplicate_click_rate: float = float(os.environ.get("DUPLICATE_CLICK_RATE", "0.00"))
 
     # Traffic variation rates for stream transformations testing
     # Rate of test publisher IDs (test-*) for traffic filtering tests

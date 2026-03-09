@@ -170,4 +170,47 @@ run_query "Average bid-to-win spread (bid_responses JOIN impressions)" \
    GROUP BY resp.seat
    ORDER BY avg_spread DESC"
 
+# ---- 15. Rejected event reasons ----
+run_query "Rejected event reasons (top 10)" \
+  "SELECT reject_reason, COUNT(*) AS rejected_count
+   FROM dq_rejected_events
+   GROUP BY reject_reason
+   ORDER BY rejected_count DESC
+   LIMIT 10"
+
+# ---- 16. Hourly quality KPIs ----
+run_query "Hourly quality KPIs" \
+  "SELECT window_start,
+          total_bid_requests, duplicate_bid_requests, duplicate_bid_request_rate,
+          total_bid_responses, duplicate_bid_responses, duplicate_bid_response_rate,
+          total_wins, duplicate_wins, duplicate_win_rate,
+          total_clicks, duplicate_clicks, duplicate_click_rate,
+          invalid_bid_requests, invalid_bid_request_rate,
+          total_events_all, duplicate_events_all, duplicate_rate_all
+   FROM dq_event_quality_hourly
+   ORDER BY window_start DESC
+   LIMIT 24"
+
+# ---- 17. Hourly auction landscape ----
+run_query "Hourly auction landscape by publisher" \
+  "SELECT window_start, publisher_id, request_count, total_bids, bids_per_request, avg_bid_price, max_bid_price
+   FROM bid_landscape_hourly
+   ORDER BY window_start DESC, total_bids DESC
+   LIMIT 20"
+
+# ---- 18. One-minute serving metrics ----
+run_query "One-minute serving metrics by bidder" \
+  "SELECT window_start, bidder_id, impressions, clicks, revenue, ctr
+   FROM realtime_serving_metrics_1m
+   ORDER BY window_start DESC, revenue DESC
+   LIMIT 30"
+
+# ---- 19. Funnel leakage by publisher ----
+run_query "Funnel leakage by publisher" \
+  "SELECT window_start, publisher_id, requests_no_response, responses_no_impression, impressions_no_click,
+          response_leakage_rate, impression_leakage_rate, click_leakage_rate
+   FROM funnel_leakage_hourly
+   ORDER BY window_start DESC, requests_no_response DESC
+   LIMIT 20"
+
 echo "==> All queries completed."

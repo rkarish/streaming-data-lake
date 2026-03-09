@@ -136,14 +136,14 @@ Verify the Iceberg tables exist:
 curl -s http://localhost:8181/v1/namespaces/db/tables | python3 -m json.tool
 ```
 
-Query all 4 tables via Trino:
+Query core and quality/metrics tables via Trino:
 
 ```bash
 docker exec trino trino --catalog iceberg --schema db \
-  --execute "SELECT 'bid_requests' AS t, COUNT(*) AS cnt FROM bid_requests
-             UNION ALL SELECT 'bid_responses', COUNT(*) FROM bid_responses
-             UNION ALL SELECT 'impressions', COUNT(*) FROM impressions
-             UNION ALL SELECT 'clicks', COUNT(*) FROM clicks"
+  --execute "SELECT table_name
+             FROM information_schema.tables
+             WHERE table_schema='db'
+             ORDER BY table_name"
 ```
 
 View generator logs:
@@ -245,6 +245,27 @@ Run Iceberg table maintenance (compaction, snapshot expiry, orphan cleanup) via 
 bash scripts/maintenance.sh
 ```
 
+### Quality and Realtime Metrics Tables
+
+The pipeline now materializes additional operational tables in `iceberg.db`:
+
+- `dq_rejected_events` -- rejected request/impression rows with reason codes (`TEST_PUBLISHER`, `PRIVATE_IP`, `NON_POSITIVE_BIDFLOOR`)
+- `dq_event_quality_hourly` -- hourly quality KPIs with per-event duplicate breakdown (requests, responses, wins, clicks) and overall duplicate rate
+- `bid_landscape_hourly` -- hourly bid density and bid price metrics per publisher
+- `realtime_serving_metrics_1m` -- one-minute impressions/clicks/revenue/CTR by bidder
+- `funnel_leakage_hourly` -- stage leakage rates across request/response/impression/click
+
+Quick validation query:
+
+```bash
+docker exec trino trino --catalog iceberg --schema db \
+  --execute "SELECT window_start, duplicate_bid_request_rate, duplicate_bid_response_rate,
+                    duplicate_win_rate, duplicate_click_rate, duplicate_rate_all
+             FROM dq_event_quality_hourly
+             ORDER BY window_start DESC
+             LIMIT 10"
+```
+
 ### 8. CloudBeaver (Web SQL IDE)
 
 Open [http://localhost:8978](http://localhost:8978). On the first launch you will need to complete the setup wizard:
@@ -252,7 +273,7 @@ Open [http://localhost:8978](http://localhost:8978). On the first launch you wil
 1. Set an admin password (must meet complexity requirements, e.g. `Password123!`)
 2. Finish the wizard
 
-Once configured, click the CloudBeaver logo in the top-left corner to reach the main database UI. The pre-configured "Trino Iceberg" connection appears in the sidebar. Expand it to browse the `iceberg > db` schema with all 4 tables (`bid_requests`, `bid_responses`, `impressions`, `clicks`) and run SQL queries.
+Once configured, click the CloudBeaver logo in the top-left corner to reach the main database UI. The pre-configured "Trino Iceberg" connection appears in the sidebar. Expand it to browse the `iceberg > db` schema (core, enriched, quality, and aggregate tables) and run SQL queries.
 
 The workspace is persisted in a Docker volume (`cloudbeaver-workspace`), so subsequent restarts will skip the wizard. After a restart, you will need to click the settings icon in the top-right corner, click "Log In", and sign in with the admin credentials you set during the wizard (e.g. `cbadmin` / `Password123!`).
 
@@ -261,7 +282,7 @@ The workspace is persisted in a Docker volume (`cloudbeaver-workspace`), so subs
 Open [http://localhost:8088](http://localhost:8088) and log in with `admin` / `password`. The setup script creates:
 
 - A Trino database connection
-- Datasets for all 8 tables (core funnel + enriched + aggregations + funnel metrics)
+- Datasets for core funnel and aggregate tables
 - Charts (visible under Charts):
   - "Bid Requests by Country" -- pie chart of request volume by geo
   - "Bid Responses by Bidder Seat" -- pie chart of responses per bidder
@@ -433,7 +454,26 @@ Run any task via **Terminal > Run Task...** (or `Cmd+Shift+P` > "Tasks: Run Task
 | `BID_RESPONSE_RATE` | `0.60` | Probability a bid request gets a response (~60% fill rate) |
 | `WIN_RATE` | `0.15` | Probability a bid response wins the auction (~15%) |
 | `CLICK_RATE` | `0.05` | Probability an impression generates a click (~5% CTR) |
+| `DUPLICATE_BID_REQUEST_RATE` | `0.00` | Probability of emitting one duplicate copy of each bid request (same key/payload) |
+| `DUPLICATE_BID_RESPONSE_RATE` | `0.00` | Probability of emitting one duplicate copy of each bid response (same key/payload) |
+| `DUPLICATE_IMPRESSION_RATE` | `0.00` | Probability of emitting one duplicate copy of each impression (same key/payload) |
+| `DUPLICATE_CLICK_RATE` | `0.00` | Probability of emitting one duplicate copy of each click (same key/payload) |
 | `BACKFILL_HOURS` | `0` | Generate N hours of historical data at max speed before real-time mode (0 = disabled) |
+
+### Duplicate Injection Mode
+
+Use duplicate rates to simulate producer retries/replays and validate deduplication logic:
+
+```bash
+# Emit duplicates for requests/responses while keeping impression/click duplicates off
+DUPLICATE_BID_REQUEST_RATE=0.10 \
+DUPLICATE_BID_RESPONSE_RATE=0.10 \
+DUPLICATE_IMPRESSION_RATE=0.00 \
+DUPLICATE_CLICK_RATE=0.00 \
+docker compose --profile generator up --build -d
+```
+
+Generator logs include duplicate counters so you can confirm injected duplicate volume.
 
 ### Backfill Mode
 
@@ -585,8 +625,8 @@ streaming-data-lake/
     bootstrap.sh                   # DB migration, admin creation, server start
     setup-dashboards.py            # REST API script to create dashboards
   scripts/
-    setup.sh                       # Schema Registry, 4 topics, bucket, 7 tables, Flink jobs, verify Trino, setup dashboards
+    setup.sh                       # Schema Registry, 4 topics, bucket, core/enriched/quality/aggregate tables, Flink jobs, verify Trino, setup dashboards
     setup-generator-local-debug.sh # Set up local .venv for debugging the generator
     query-examples.sh              # Sample analytical queries via Trino
-    maintenance.sh                 # Iceberg table maintenance for all 4 tables (compaction, expiry, cleanup)
+    maintenance.sh                 # Iceberg table maintenance for all core/enriched/quality/aggregate tables
 ```

@@ -70,6 +70,22 @@ def _produce(producers, topic, key, value):
     p.poll(0)
 
 
+def _maybe_produce_duplicate(
+    producers: dict[str, SerializingProducer],
+    topic: str,
+    key: str,
+    value: dict,
+    duplicate_rate: float,
+) -> bool:
+    """Probabilistically emit one duplicate copy of a just-produced event."""
+    if duplicate_rate <= 0:
+        return False
+    if random.random() < duplicate_rate:
+        _produce(producers, topic, key, value)
+        return True
+    return False
+
+
 def create_producers() -> dict[str, SerializingProducer]:
     """
     Create a SerializingProducer per Kafka topic with Avro value serialization.
@@ -171,7 +187,16 @@ def run_backfill(producers: dict[str, SerializingProducer], hours: int) -> dict:
         total_events, hours, start.isoformat(), now.isoformat(),
     )
 
-    counts: dict = {"bid_requests": 0, "bid_responses": 0, "impressions": 0, "clicks": 0}
+    counts: dict = {
+        "bid_requests": 0,
+        "bid_responses": 0,
+        "impressions": 0,
+        "clicks": 0,
+        "duplicate_bid_requests": 0,
+        "duplicate_bid_responses": 0,
+        "duplicate_impressions": 0,
+        "duplicate_clicks": 0,
+    }
 
     for i in range(total_events):
         event_ts = start + timedelta(seconds=i * interval_seconds)
@@ -179,21 +204,53 @@ def run_backfill(producers: dict[str, SerializingProducer], hours: int) -> dict:
         bid_request = generate_bid_request(base_ts=event_ts)
         _produce(producers, config.topic_bid_requests, bid_request["id"], bid_request)
         counts["bid_requests"] += 1
+        if _maybe_produce_duplicate(
+            producers,
+            config.topic_bid_requests,
+            bid_request["id"],
+            bid_request,
+            config.duplicate_bid_request_rate,
+        ):
+            counts["duplicate_bid_requests"] += 1
 
         if random.random() < config.bid_response_rate:
             bid_response = generate_bid_response(bid_request)
             _produce(producers, config.topic_bid_responses, bid_response["id"], bid_response)
             counts["bid_responses"] += 1
+            if _maybe_produce_duplicate(
+                producers,
+                config.topic_bid_responses,
+                bid_response["id"],
+                bid_response,
+                config.duplicate_bid_response_rate,
+            ):
+                counts["duplicate_bid_responses"] += 1
 
             if random.random() < config.win_rate:
                 impression = generate_impression(bid_request, bid_response)
                 _produce(producers, config.topic_impressions, impression["impression_id"], impression)
                 counts["impressions"] += 1
+                if _maybe_produce_duplicate(
+                    producers,
+                    config.topic_impressions,
+                    impression["impression_id"],
+                    impression,
+                    config.duplicate_impression_rate,
+                ):
+                    counts["duplicate_impressions"] += 1
 
                 if random.random() < config.click_rate:
                     click = generate_click(bid_request, impression)
                     _produce(producers, config.topic_clicks, click["click_id"], click)
                     counts["clicks"] += 1
+                    if _maybe_produce_duplicate(
+                        producers,
+                        config.topic_clicks,
+                        click["click_id"],
+                        click,
+                        config.duplicate_click_rate,
+                    ):
+                        counts["duplicate_clicks"] += 1
 
         if counts["bid_requests"] % 1000 == 0:
             _flush_all(producers)
@@ -205,9 +262,12 @@ def run_backfill(producers: dict[str, SerializingProducer], hours: int) -> dict:
 
     _flush_all(producers)
     logger.info(
-        "Backfill complete: %d requests, %d responses, %d impressions, %d clicks",
+        "Backfill complete: %d requests, %d responses, %d impressions, %d clicks "
+        "(duplicates: %d requests, %d responses, %d impressions, %d clicks)",
         counts["bid_requests"], counts["bid_responses"],
         counts["impressions"], counts["clicks"],
+        counts["duplicate_bid_requests"], counts["duplicate_bid_responses"],
+        counts["duplicate_impressions"], counts["duplicate_clicks"],
     )
     return counts
 
@@ -233,14 +293,28 @@ def main() -> None:
 
     logger.info(
         "Starting funnel generator: %d bid-requests/sec "
-        "(response_rate=%.2f, win_rate=%.2f, click_rate=%.2f)",
+        "(response_rate=%.2f, win_rate=%.2f, click_rate=%.2f, "
+        "dup_request=%.2f, dup_response=%.2f, dup_impression=%.2f, dup_click=%.2f)",
         eps,
         config.bid_response_rate,
         config.win_rate,
         config.click_rate,
+        config.duplicate_bid_request_rate,
+        config.duplicate_bid_response_rate,
+        config.duplicate_impression_rate,
+        config.duplicate_click_rate,
     )
 
-    counts = {"bid_requests": 0, "bid_responses": 0, "impressions": 0, "clicks": 0}
+    counts = {
+        "bid_requests": 0,
+        "bid_responses": 0,
+        "impressions": 0,
+        "clicks": 0,
+        "duplicate_bid_requests": 0,
+        "duplicate_bid_responses": 0,
+        "duplicate_impressions": 0,
+        "duplicate_clicks": 0,
+    }
 
     try:
         next_send = time.monotonic()
@@ -253,31 +327,68 @@ def main() -> None:
             bid_request = generate_bid_request()
             _produce(producers, config.topic_bid_requests, bid_request["id"], bid_request)
             counts["bid_requests"] += 1
+            if _maybe_produce_duplicate(
+                producers,
+                config.topic_bid_requests,
+                bid_request["id"],
+                bid_request,
+                config.duplicate_bid_request_rate,
+            ):
+                counts["duplicate_bid_requests"] += 1
 
             if random.random() < config.bid_response_rate:
                 bid_response = generate_bid_response(bid_request)
                 _produce(producers, config.topic_bid_responses, bid_response["id"], bid_response)
                 counts["bid_responses"] += 1
+                if _maybe_produce_duplicate(
+                    producers,
+                    config.topic_bid_responses,
+                    bid_response["id"],
+                    bid_response,
+                    config.duplicate_bid_response_rate,
+                ):
+                    counts["duplicate_bid_responses"] += 1
 
                 if random.random() < config.win_rate:
                     impression = generate_impression(bid_request, bid_response)
                     _produce(producers, config.topic_impressions, impression["impression_id"], impression)
                     counts["impressions"] += 1
+                    if _maybe_produce_duplicate(
+                        producers,
+                        config.topic_impressions,
+                        impression["impression_id"],
+                        impression,
+                        config.duplicate_impression_rate,
+                    ):
+                        counts["duplicate_impressions"] += 1
 
                     if random.random() < config.click_rate:
                         click = generate_click(bid_request, impression)
                         _produce(producers, config.topic_clicks, click["click_id"], click)
                         counts["clicks"] += 1
+                        if _maybe_produce_duplicate(
+                            producers,
+                            config.topic_clicks,
+                            click["click_id"],
+                            click,
+                            config.duplicate_click_rate,
+                        ):
+                            counts["duplicate_clicks"] += 1
 
             total = counts["bid_requests"]
             if total % 100 == 0:
                 _flush_all(producers)
                 logger.info(
-                    "Produced: %d requests, %d responses, %d impressions, %d clicks",
+                    "Produced: %d requests, %d responses, %d impressions, %d clicks "
+                    "(duplicates: %d requests, %d responses, %d impressions, %d clicks)",
                     counts["bid_requests"],
                     counts["bid_responses"],
                     counts["impressions"],
                     counts["clicks"],
+                    counts["duplicate_bid_requests"],
+                    counts["duplicate_bid_responses"],
+                    counts["duplicate_impressions"],
+                    counts["duplicate_clicks"],
                 )
 
             next_send += interval
@@ -285,11 +396,16 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info(
             "Shutting down. Totals: %d requests, %d responses, "
-            "%d impressions, %d clicks",
+            "%d impressions, %d clicks "
+            "(duplicates: %d requests, %d responses, %d impressions, %d clicks)",
             counts["bid_requests"],
             counts["bid_responses"],
             counts["impressions"],
             counts["clicks"],
+            counts["duplicate_bid_requests"],
+            counts["duplicate_bid_responses"],
+            counts["duplicate_impressions"],
+            counts["duplicate_clicks"],
         )
     finally:
         _flush_all(producers)

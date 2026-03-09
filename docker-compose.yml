@@ -108,6 +108,11 @@ services:
       BID_RESPONSE_RATE: 0.60
       WIN_RATE: 0.15
       CLICK_RATE: 0.05
+      # Duplicate injection rates for dedup/idempotency testing
+      DUPLICATE_BID_REQUEST_RATE: 0.00
+      DUPLICATE_BID_RESPONSE_RATE: 0.00
+      DUPLICATE_IMPRESSION_RATE: 0.00
+      DUPLICATE_CLICK_RATE: 0.00
       # Traffic variation rates for testing stream transformations
       TEST_PUBLISHER_RATE: 0.05
       INVALID_IP_RATE: 0.02

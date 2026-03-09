@@ -9,7 +9,8 @@ set -euo pipefail
 #   2. MinIO bucket (warehouse)
 #   3. Iceberg namespace and tables:
 #      - Core: db.bid_requests, bid_responses, impressions, clicks
-#      - Enriched/Aggregation: db.bid_requests_enriched, hourly_impressions_by_geo, rolling_metrics_by_bidder
+#      - Enriched/metrics: db.bid_requests_enriched, hourly_impressions_by_geo, rolling_metrics_by_bidder, hourly_funnel_by_publisher
+#      - Quality/serving: db.dq_rejected_events, dq_event_quality_hourly, bid_landscape_hourly, realtime_serving_metrics_1m, funnel_leakage_hourly
 #   4. Flink streaming job (Kafka -> Iceberg)
 #   5. Trino connectivity verification
 #   6. CloudBeaver readiness check
@@ -431,6 +432,294 @@ else
   exit 1
 fi
 
+# -- 3i: Create table 'hourly_funnel_by_publisher' (upsert aggregation table) --
+echo "==> Creating Iceberg table 'db.hourly_funnel_by_publisher'..."
+
+funnel_payload='{
+  "name": "hourly_funnel_by_publisher",
+  "schema": {
+    "type": "struct",
+    "schema-id": 0,
+    "identifier-field-ids": [1, 2],
+    "fields": [
+      {"id": 1, "name": "window_start", "type": "timestamp", "required": true},
+      {"id": 2, "name": "publisher_id", "type": "string", "required": true},
+      {"id": 3, "name": "bid_requests", "type": "long", "required": false},
+      {"id": 4, "name": "bid_responses", "type": "long", "required": false},
+      {"id": 5, "name": "impressions", "type": "long", "required": false},
+      {"id": 6, "name": "clicks", "type": "long", "required": false},
+      {"id": 7, "name": "fill_rate", "type": "double", "required": false},
+      {"id": 8, "name": "win_rate", "type": "double", "required": false},
+      {"id": 9, "name": "ctr", "type": "double", "required": false}
+    ]
+  },
+  "partition-spec": {
+    "spec-id": 0,
+    "fields": [
+      {"source-id": 1, "transform": "day", "name": "window_day", "field-id": 1000}
+    ]
+  },
+  "write-order": {"order-id": 0, "fields": []},
+  "properties": {"format-version": "2", "write.upsert.enabled": "true"}
+}'
+
+funnel_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "${ICEBERG_REST_URL}/v1/namespaces/db/tables" \
+  -H "Content-Type: application/json" \
+  -d "${funnel_payload}")
+
+if [ "$funnel_http_code" -eq 200 ]; then
+  echo "    Table 'db.hourly_funnel_by_publisher' created successfully."
+elif [ "$funnel_http_code" -eq 409 ]; then
+  echo "    Table 'db.hourly_funnel_by_publisher' already exists, skipping."
+else
+  echo "    ERROR: Failed to create table 'db.hourly_funnel_by_publisher' (HTTP ${funnel_http_code})."
+  exit 1
+fi
+
+# -- 3j: Create table 'dq_rejected_events' (append quality table) --
+echo "==> Creating Iceberg table 'db.dq_rejected_events'..."
+
+dq_rejected_payload='{
+  "name": "dq_rejected_events",
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {"id": 1, "name": "request_id", "type": "string", "required": false},
+      {"id": 2, "name": "imp_id", "type": "string", "required": false},
+      {"id": 3, "name": "publisher_id", "type": "string", "required": false},
+      {"id": 4, "name": "device_ip", "type": "string", "required": false},
+      {"id": 5, "name": "reject_reason", "type": "string", "required": false},
+      {"id": 6, "name": "event_timestamp", "type": "timestamptz", "required": false}
+    ]
+  },
+  "partition-spec": {
+    "spec-id": 0,
+    "fields": [
+      {"source-id": 6, "transform": "day", "name": "event_timestamp_day", "field-id": 1000}
+    ]
+  },
+  "write-order": {"order-id": 0, "fields": []},
+  "properties": {"format-version": "2"}
+}'
+
+dq_rejected_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "${ICEBERG_REST_URL}/v1/namespaces/db/tables" \
+  -H "Content-Type: application/json" \
+  -d "${dq_rejected_payload}")
+
+if [ "$dq_rejected_http_code" -eq 200 ]; then
+  echo "    Table 'db.dq_rejected_events' created successfully."
+elif [ "$dq_rejected_http_code" -eq 409 ]; then
+  echo "    Table 'db.dq_rejected_events' already exists, skipping."
+else
+  echo "    ERROR: Failed to create table 'db.dq_rejected_events' (HTTP ${dq_rejected_http_code})."
+  exit 1
+fi
+
+# -- 3k: Create table 'dq_event_quality_hourly' (upsert quality metrics table) --
+echo "==> Creating Iceberg table 'db.dq_event_quality_hourly'..."
+
+dq_quality_payload='{
+  "name": "dq_event_quality_hourly",
+  "schema": {
+    "type": "struct",
+    "schema-id": 0,
+    "identifier-field-ids": [1],
+    "fields": [
+      {"id": 1, "name": "window_start", "type": "timestamp", "required": true},
+      {"id": 2, "name": "total_bid_requests", "type": "long", "required": false},
+      {"id": 3, "name": "unique_bid_requests", "type": "long", "required": false},
+      {"id": 4, "name": "duplicate_bid_requests", "type": "long", "required": false},
+      {"id": 5, "name": "duplicate_bid_request_rate", "type": "double", "required": false},
+      {"id": 6, "name": "total_bid_responses", "type": "long", "required": false},
+      {"id": 7, "name": "unique_bid_responses", "type": "long", "required": false},
+      {"id": 8, "name": "duplicate_bid_responses", "type": "long", "required": false},
+      {"id": 9, "name": "duplicate_bid_response_rate", "type": "double", "required": false},
+      {"id": 10, "name": "total_wins", "type": "long", "required": false},
+      {"id": 11, "name": "unique_wins", "type": "long", "required": false},
+      {"id": 12, "name": "duplicate_wins", "type": "long", "required": false},
+      {"id": 13, "name": "duplicate_win_rate", "type": "double", "required": false},
+      {"id": 14, "name": "total_clicks", "type": "long", "required": false},
+      {"id": 15, "name": "unique_clicks", "type": "long", "required": false},
+      {"id": 16, "name": "duplicate_clicks", "type": "long", "required": false},
+      {"id": 17, "name": "duplicate_click_rate", "type": "double", "required": false},
+      {"id": 18, "name": "invalid_bid_requests", "type": "long", "required": false},
+      {"id": 19, "name": "invalid_bid_request_rate", "type": "double", "required": false},
+      {"id": 20, "name": "total_events_all", "type": "long", "required": false},
+      {"id": 21, "name": "duplicate_events_all", "type": "long", "required": false},
+      {"id": 22, "name": "duplicate_rate_all", "type": "double", "required": false}
+    ]
+  },
+  "partition-spec": {
+    "spec-id": 0,
+    "fields": [
+      {"source-id": 1, "transform": "day", "name": "window_day", "field-id": 1000}
+    ]
+  },
+  "write-order": {"order-id": 0, "fields": []},
+  "properties": {"format-version": "2", "write.upsert.enabled": "true"}
+}'
+
+dq_quality_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "${ICEBERG_REST_URL}/v1/namespaces/db/tables" \
+  -H "Content-Type: application/json" \
+  -d "${dq_quality_payload}")
+
+if [ "$dq_quality_http_code" -eq 200 ]; then
+  echo "    Table 'db.dq_event_quality_hourly' created successfully."
+elif [ "$dq_quality_http_code" -eq 409 ]; then
+  echo "    Table 'db.dq_event_quality_hourly' already exists. Recreating to apply latest schema..."
+  delete_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X DELETE "${ICEBERG_REST_URL}/v1/namespaces/db/tables/dq_event_quality_hourly")
+  if [ "$delete_http_code" -ne 204 ] && [ "$delete_http_code" -ne 404 ]; then
+    echo "    ERROR: Failed to delete table 'db.dq_event_quality_hourly' (HTTP ${delete_http_code})."
+    exit 1
+  fi
+  dq_quality_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X POST "${ICEBERG_REST_URL}/v1/namespaces/db/tables" \
+    -H "Content-Type: application/json" \
+    -d "${dq_quality_payload}")
+  if [ "$dq_quality_http_code" -eq 200 ]; then
+    echo "    Table 'db.dq_event_quality_hourly' recreated successfully."
+  else
+    echo "    ERROR: Failed to recreate table 'db.dq_event_quality_hourly' (HTTP ${dq_quality_http_code})."
+    exit 1
+  fi
+else
+  echo "    ERROR: Failed to create table 'db.dq_event_quality_hourly' (HTTP ${dq_quality_http_code})."
+  exit 1
+fi
+
+# -- 3l: Create table 'bid_landscape_hourly' (upsert auction metrics table) --
+echo "==> Creating Iceberg table 'db.bid_landscape_hourly'..."
+
+bid_landscape_payload='{
+  "name": "bid_landscape_hourly",
+  "schema": {
+    "type": "struct",
+    "schema-id": 0,
+    "identifier-field-ids": [1, 2],
+    "fields": [
+      {"id": 1, "name": "window_start", "type": "timestamp", "required": true},
+      {"id": 2, "name": "publisher_id", "type": "string", "required": true},
+      {"id": 3, "name": "request_count", "type": "long", "required": false},
+      {"id": 4, "name": "total_bids", "type": "long", "required": false},
+      {"id": 5, "name": "bids_per_request", "type": "double", "required": false},
+      {"id": 6, "name": "avg_bid_price", "type": "double", "required": false},
+      {"id": 7, "name": "max_bid_price", "type": "double", "required": false}
+    ]
+  },
+  "partition-spec": {
+    "spec-id": 0,
+    "fields": [
+      {"source-id": 1, "transform": "day", "name": "window_day", "field-id": 1000}
+    ]
+  },
+  "write-order": {"order-id": 0, "fields": []},
+  "properties": {"format-version": "2", "write.upsert.enabled": "true"}
+}'
+
+bid_landscape_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "${ICEBERG_REST_URL}/v1/namespaces/db/tables" \
+  -H "Content-Type: application/json" \
+  -d "${bid_landscape_payload}")
+
+if [ "$bid_landscape_http_code" -eq 200 ]; then
+  echo "    Table 'db.bid_landscape_hourly' created successfully."
+elif [ "$bid_landscape_http_code" -eq 409 ]; then
+  echo "    Table 'db.bid_landscape_hourly' already exists, skipping."
+else
+  echo "    ERROR: Failed to create table 'db.bid_landscape_hourly' (HTTP ${bid_landscape_http_code})."
+  exit 1
+fi
+
+# -- 3m: Create table 'realtime_serving_metrics_1m' (upsert realtime table) --
+echo "==> Creating Iceberg table 'db.realtime_serving_metrics_1m'..."
+
+realtime_metrics_payload='{
+  "name": "realtime_serving_metrics_1m",
+  "schema": {
+    "type": "struct",
+    "schema-id": 0,
+    "identifier-field-ids": [1, 2],
+    "fields": [
+      {"id": 1, "name": "window_start", "type": "timestamp", "required": true},
+      {"id": 2, "name": "bidder_id", "type": "string", "required": true},
+      {"id": 3, "name": "impressions", "type": "long", "required": false},
+      {"id": 4, "name": "clicks", "type": "long", "required": false},
+      {"id": 5, "name": "revenue", "type": "double", "required": false},
+      {"id": 6, "name": "ctr", "type": "double", "required": false}
+    ]
+  },
+  "partition-spec": {
+    "spec-id": 0,
+    "fields": [
+      {"source-id": 1, "transform": "day", "name": "window_day", "field-id": 1000}
+    ]
+  },
+  "write-order": {"order-id": 0, "fields": []},
+  "properties": {"format-version": "2", "write.upsert.enabled": "true"}
+}'
+
+realtime_metrics_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "${ICEBERG_REST_URL}/v1/namespaces/db/tables" \
+  -H "Content-Type: application/json" \
+  -d "${realtime_metrics_payload}")
+
+if [ "$realtime_metrics_http_code" -eq 200 ]; then
+  echo "    Table 'db.realtime_serving_metrics_1m' created successfully."
+elif [ "$realtime_metrics_http_code" -eq 409 ]; then
+  echo "    Table 'db.realtime_serving_metrics_1m' already exists, skipping."
+else
+  echo "    ERROR: Failed to create table 'db.realtime_serving_metrics_1m' (HTTP ${realtime_metrics_http_code})."
+  exit 1
+fi
+
+# -- 3n: Create table 'funnel_leakage_hourly' (upsert leakage table) --
+echo "==> Creating Iceberg table 'db.funnel_leakage_hourly'..."
+
+funnel_leakage_payload='{
+  "name": "funnel_leakage_hourly",
+  "schema": {
+    "type": "struct",
+    "schema-id": 0,
+    "identifier-field-ids": [1, 2],
+    "fields": [
+      {"id": 1, "name": "window_start", "type": "timestamp", "required": true},
+      {"id": 2, "name": "publisher_id", "type": "string", "required": true},
+      {"id": 3, "name": "requests_no_response", "type": "long", "required": false},
+      {"id": 4, "name": "responses_no_impression", "type": "long", "required": false},
+      {"id": 5, "name": "impressions_no_click", "type": "long", "required": false},
+      {"id": 6, "name": "response_leakage_rate", "type": "double", "required": false},
+      {"id": 7, "name": "impression_leakage_rate", "type": "double", "required": false},
+      {"id": 8, "name": "click_leakage_rate", "type": "double", "required": false}
+    ]
+  },
+  "partition-spec": {
+    "spec-id": 0,
+    "fields": [
+      {"source-id": 1, "transform": "day", "name": "window_day", "field-id": 1000}
+    ]
+  },
+  "write-order": {"order-id": 0, "fields": []},
+  "properties": {"format-version": "2", "write.upsert.enabled": "true"}
+}'
+
+funnel_leakage_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "${ICEBERG_REST_URL}/v1/namespaces/db/tables" \
+  -H "Content-Type: application/json" \
+  -d "${funnel_leakage_payload}")
+
+if [ "$funnel_leakage_http_code" -eq 200 ]; then
+  echo "    Table 'db.funnel_leakage_hourly' created successfully."
+elif [ "$funnel_leakage_http_code" -eq 409 ]; then
+  echo "    Table 'db.funnel_leakage_hourly' already exists, skipping."
+else
+  echo "    ERROR: Failed to create table 'db.funnel_leakage_hourly' (HTTP ${funnel_leakage_http_code})."
+  exit 1
+fi
+
 # -----------------------------------------------------------------------------
 # Task 4: Submit Flink streaming job
 # -----------------------------------------------------------------------------
@@ -439,12 +728,36 @@ echo "==> Checking for existing Flink jobs..."
 running_jobs=$(curl -s http://localhost:8081/jobs 2>/dev/null \
   | python3 -c "import sys,json; jobs=json.load(sys.stdin).get('jobs',[]); print(sum(1 for j in jobs if j['status']=='RUNNING'))" 2>/dev/null || echo "0")
 
-if [ "$running_jobs" -gt 0 ]; then
-  echo "    Found ${running_jobs} running Flink job(s), skipping submission."
+if [ "$running_jobs" -ge 3 ]; then
+  echo "    Found ${running_jobs} running Flink job(s), assuming all pipelines are active."
 else
-  echo "==> Submitting Flink streaming job (Kafka -> Iceberg)..."
+  if [ "$running_jobs" -gt 0 ]; then
+    echo "    Found only ${running_jobs} running Flink job(s); expected at least 3 (ingestion, aggregation, funnel)."
+    echo "    Cancelling existing Flink jobs to recover from partial deployment..."
+    running_job_ids=$(curl -s http://localhost:8081/jobs 2>/dev/null \
+      | python3 -c "import sys,json; jobs=json.load(sys.stdin).get('jobs',[]); print('\n'.join(j['id'] for j in jobs if j['status']=='RUNNING'))" 2>/dev/null || true)
+    if [ -n "${running_job_ids}" ]; then
+      while IFS= read -r job_id; do
+        if [ -n "${job_id}" ]; then
+          echo "    Cancelling job ${job_id}..."
+          curl -s -X PATCH "http://localhost:8081/jobs/${job_id}?mode=cancel" > /dev/null
+        fi
+      done <<< "${running_job_ids}"
+      echo "    Waiting for running jobs to stop..."
+      for _ in $(seq 1 30); do
+        remaining=$(curl -s http://localhost:8081/jobs 2>/dev/null \
+          | python3 -c "import sys,json; jobs=json.load(sys.stdin).get('jobs',[]); print(sum(1 for j in jobs if j['status']=='RUNNING'))" 2>/dev/null || echo "0")
+        if [ "${remaining}" -eq 0 ]; then
+          break
+        fi
+        sleep 2
+      done
+    fi
+  fi
+
+  echo "==> Submitting Flink streaming jobs (ingestion + aggregation + funnel)..."
   docker compose exec -T flink-jobmanager bash /opt/flink/submit-sql-job.sh
-  echo "    Flink streaming job submitted."
+  echo "    Flink streaming jobs submitted."
 fi
 
 # -----------------------------------------------------------------------------
@@ -458,14 +771,14 @@ while [ $attempt -lt $max_attempts ]; do
   attempt=$((attempt + 1))
   tables=$(docker exec trino trino --catalog iceberg --schema db --execute "SHOW TABLES" 2>/dev/null || true)
   found=true
-  for t in bid_requests bid_responses impressions clicks bid_requests_enriched hourly_impressions_by_geo rolling_metrics_by_bidder; do
+  for t in bid_requests bid_responses impressions clicks bid_requests_enriched hourly_impressions_by_geo rolling_metrics_by_bidder hourly_funnel_by_publisher dq_rejected_events dq_event_quality_hourly bid_landscape_hourly realtime_serving_metrics_1m funnel_leakage_hourly; do
     if ! echo "$tables" | grep -q "$t"; then
       found=false
       break
     fi
   done
   if [ "$found" = true ]; then
-    echo "    Trino verified: all 7 tables are visible."
+    echo "    Trino verified: all 13 tables are visible."
     break
   fi
   if [ $attempt -eq $max_attempts ]; then
@@ -537,6 +850,12 @@ echo "    - Iceberg tables:  db.bid_requests, db.bid_responses, db.impressions, 
 echo "                       db.bid_requests_enriched (with device classification)"
 echo "                       db.hourly_impressions_by_geo (upsert aggregation)"
 echo "                       db.rolling_metrics_by_bidder (upsert aggregation)"
+echo "                       db.hourly_funnel_by_publisher (upsert aggregation)"
+echo "                       db.dq_rejected_events (rejected traffic stream)"
+echo "                       db.dq_event_quality_hourly (quality KPIs)"
+echo "                       db.bid_landscape_hourly (auction density/price KPIs)"
+echo "                       db.realtime_serving_metrics_1m (low-latency serving metrics)"
+echo "                       db.funnel_leakage_hourly (stage leakage KPIs)"
 echo "    - Flink job:       Streaming Kafka -> Iceberg (check http://localhost:8081)"
 echo "    - Trino:           Query engine ready (http://localhost:8080)"
 echo "    - CloudBeaver:     Web SQL IDE ready (http://localhost:8978)"

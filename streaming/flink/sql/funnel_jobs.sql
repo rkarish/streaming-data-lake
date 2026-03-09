@@ -11,6 +11,9 @@ SET 'state.checkpoints.dir' = 's3://warehouse/checkpoints/funnel/';
 -- Configure state TTL for interval joins (24 hours, cleans up old state)
 SET 'table.exec.state.ttl' = '86400000';
 
+EXECUTE STATEMENT SET
+BEGIN
+
 -- 4-way LEFT interval join: bid_requests -> bid_responses -> impressions -> clicks
 -- Interval bounds reflect the expected latency between each stage:
 --   request -> response: within 5 seconds
@@ -58,3 +61,45 @@ LEFT JOIN kafka_clicks cl
 GROUP BY
     FLOOR(br.`event_ts` TO HOUR),
     COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`);
+
+-- Hourly leakage metrics by publisher.
+INSERT INTO iceberg_funnel_leakage_hourly
+SELECT
+    FLOOR(br.`event_ts` TO HOUR) AS window_start,
+    COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`) AS publisher_id,
+    COUNT(DISTINCT br.`id`) - COUNT(DISTINCT resp.`id`) AS requests_no_response,
+    COUNT(DISTINCT resp.`id`) - COUNT(DISTINCT imp.`impression_id`) AS responses_no_impression,
+    COUNT(DISTINCT imp.`impression_id`) - COUNT(DISTINCT cl.`click_id`) AS impressions_no_click,
+    CASE
+        WHEN COUNT(DISTINCT br.`id`) > 0
+        THEN CAST(COUNT(DISTINCT br.`id`) - COUNT(DISTINCT resp.`id`) AS DOUBLE)
+            / CAST(COUNT(DISTINCT br.`id`) AS DOUBLE)
+        ELSE 0.0
+    END AS response_leakage_rate,
+    CASE
+        WHEN COUNT(DISTINCT resp.`id`) > 0
+        THEN CAST(COUNT(DISTINCT resp.`id`) - COUNT(DISTINCT imp.`impression_id`) AS DOUBLE)
+            / CAST(COUNT(DISTINCT resp.`id`) AS DOUBLE)
+        ELSE 0.0
+    END AS impression_leakage_rate,
+    CASE
+        WHEN COUNT(DISTINCT imp.`impression_id`) > 0
+        THEN CAST(COUNT(DISTINCT imp.`impression_id`) - COUNT(DISTINCT cl.`click_id`) AS DOUBLE)
+            / CAST(COUNT(DISTINCT imp.`impression_id`) AS DOUBLE)
+        ELSE 0.0
+    END AS click_leakage_rate
+FROM kafka_bid_requests br
+LEFT JOIN kafka_bid_responses resp
+    ON br.`id` = resp.`ext`.`request_id`
+    AND resp.`event_ts` BETWEEN br.`event_ts` AND br.`event_ts` + INTERVAL '5' SECOND
+LEFT JOIN kafka_impressions imp
+    ON resp.`id` = imp.`response_id`
+    AND imp.`event_ts` BETWEEN resp.`event_ts` AND resp.`event_ts` + INTERVAL '10' SECOND
+LEFT JOIN kafka_clicks cl
+    ON imp.`impression_id` = cl.`impression_id`
+    AND cl.`event_ts` BETWEEN imp.`event_ts` AND imp.`event_ts` + INTERVAL '60' SECOND
+GROUP BY
+    FLOOR(br.`event_ts` TO HOUR),
+    COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`);
+
+END;
