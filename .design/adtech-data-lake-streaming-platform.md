@@ -1236,8 +1236,6 @@ Extend maintenance coverage beyond the 4 core append tables:
 
 | File | Changes |
 |---|---|
-| `schemas/avro/*.avsc` | Add quality/provenance/timestamp evolution fields with backward-compatible defaults |
-| `mock-data-gen/src/schemas.py` | Generate optional new metadata fields and multi-entity auction variance |
 | `mock-data-gen/src/generator.py` | Populate ingestion metadata and producer/version markers |
 | `streaming/flink/sql/create_tables.sql` | Add Phase 9 source/sink/quality table DDLs and lookup table definitions |
 | `streaming/flink/sql/insert_jobs.sql` | Replace first-element flattening with `UNNEST` and canonical inserts |
@@ -1246,7 +1244,6 @@ Extend maintenance coverage beyond the 4 core append tables:
 | `scripts/setup.sh` | Create new Iceberg tables and submit expanded Flink SQL jobs |
 | `scripts/query-examples.sh` | Add quality, leakage, and auction-fidelity analytical queries |
 | `scripts/maintenance.sh` | Include all enriched, aggregation, funnel, and Phase 9 tables with policy-specific maintenance |
-| `superset/setup-dashboards.py` | Add new datasets/charts for quality, auction fidelity, and real-time health |
 
 ### Forward-Looking
 

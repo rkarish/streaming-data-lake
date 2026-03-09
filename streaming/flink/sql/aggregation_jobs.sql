@@ -159,11 +159,22 @@ FROM (
 ) w
 LEFT JOIN (
     SELECT
-        FLOOR(br.`event_ts` TO HOUR) AS window_start,
-        COUNT(*) AS total_bid_requests,
-        COUNT(DISTINCT br.`id`) AS unique_bid_requests,
-        SUM(
-            CASE
+        totals.window_start,
+        totals.total_bid_requests,
+        totals.unique_bid_requests,
+        COALESCE(invalid.invalid_bid_requests, 0) AS invalid_bid_requests
+    FROM (
+        SELECT
+            FLOOR(`event_ts` TO HOUR) AS window_start,
+            COUNT(*) AS total_bid_requests,
+            COUNT(DISTINCT `id`) AS unique_bid_requests
+        FROM kafka_bid_requests
+        GROUP BY FLOOR(`event_ts` TO HOUR)
+    ) totals
+    LEFT JOIN (
+        SELECT
+            FLOOR(br.`event_ts` TO HOUR) AS window_start,
+            COUNT(DISTINCT CASE
                 WHEN COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`) LIKE 'test-%'
                     OR br.`device`.`ip` LIKE '10.%'
                     OR br.`device`.`ip` LIKE '192.168.%'
@@ -175,14 +186,14 @@ LEFT JOIN (
                     OR br.`device`.`ip` LIKE '172.30.%'
                     OR br.`device`.`ip` LIKE '172.31.%'
                     OR imp_bidfloor <= 0
-                THEN 1
-                ELSE 0
-            END
-        ) AS invalid_bid_requests
-    FROM kafka_bid_requests br
-    CROSS JOIN UNNEST(br.`imp`) AS imp_t(`imp_id`, `imp_banner`, `imp_bidfloor`, `imp_bidfloorcur`, `imp_secure`)
-    GROUP BY
-        FLOOR(br.`event_ts` TO HOUR)
+                THEN br.`id`
+                ELSE NULL
+            END) AS invalid_bid_requests
+        FROM kafka_bid_requests br
+        CROSS JOIN UNNEST(br.`imp`) AS imp_t(`imp_id`, `imp_banner`, `imp_bidfloor`, `imp_bidfloorcur`, `imp_secure`)
+        GROUP BY FLOOR(br.`event_ts` TO HOUR)
+    ) invalid
+        ON totals.window_start = invalid.window_start
 ) req
     ON w.window_start = req.window_start
 LEFT JOIN (
