@@ -11,7 +11,8 @@ subsets:
   - addresses:
       - ip: 192.168.65.254
     ports:
-      - port: 39092
+      - name: broker
+        port: 39092
 ---
 apiVersion: v1
 kind: Endpoints
@@ -24,7 +25,8 @@ subsets:
   - addresses:
       - ip: 192.168.65.254
     ports:
-      - port: 8085
+      - name: http
+        port: 8085
 ---
 apiVersion: v1
 kind: Endpoints
@@ -37,7 +39,8 @@ subsets:
   - addresses:
       - ip: 192.168.65.254
     ports:
-      - port: 8181
+      - name: http
+        port: 8181
 ---
 apiVersion: v1
 kind: Endpoints
@@ -50,4 +53,5 @@ subsets:
   - addresses:
       - ip: 192.168.65.254
     ports:
-      - port: 9000
+      - name: api
+        port: 9000

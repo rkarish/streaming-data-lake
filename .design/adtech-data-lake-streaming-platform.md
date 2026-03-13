@@ -345,7 +345,7 @@ parsed.writeStream \
 | Service | Image / Base | Port | Purpose |
 |---|---|---|---|
 | `kafka` | `apache/kafka` (KRaft) | 9092 | Message broker, no ZooKeeper |
-| `schema-registry` | `confluentinc/cp-schema-registry:7.8.0` | 8082 | Avro schema governance & compatibility |
+| `schema-registry` | `confluentinc/cp-schema-registry:7.8.0` | 8085 | Avro schema governance & compatibility |
 | `mock-data-gen` | Custom (Python) | -- | Generates OpenRTB events to Kafka |
 | `iceberg-rest` | `tabulario/iceberg-rest` | 8181 | Iceberg REST catalog |
 | `minio` | `minio/minio` | 9000/9001 | S3-compatible object storage |
@@ -938,7 +938,7 @@ Schema Registry with Avro serialization solves all three problems by providing a
 
 #### 8.2 Schema Registry Integration
 
-**Service**: Confluent Schema Registry (`confluentinc/cp-schema-registry:7.8.0`) is already included in the Docker Compose stack, exposed on host port 8082.
+**Service**: Confluent Schema Registry (`confluentinc/cp-schema-registry:7.8.0`) is already included in the Docker Compose stack, exposed on host port 8085.
 
 **Compatibility mode**: `BACKWARD` (default). This means new schemas can:
 - Add fields with default values
@@ -1266,7 +1266,7 @@ The migration follows a **split-plane** design: infrastructure services remain i
 ┌─────────────────────────────────────────────────┐
 │                    Docker Compose               │
 │                                                 │
-│  Kafka (:29092)    Schema Registry (:8082)      │
+│  Kafka (:29092)    Schema Registry (:8085)      │
 │  MinIO (:9000)     Iceberg REST (:8181)         │
 │  Trino (:8080)     CloudBeaver (:8978)          │
 │  Superset (:8088)  Mock Data Generator          │
@@ -1623,7 +1623,7 @@ SQL files reference Docker Compose internal hostnames (`kafka:9092`, `schema-reg
 set -euo pipefail
 
 KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-host.docker.internal:39092}"
-SCHEMA_REGISTRY="${SCHEMA_REGISTRY:-http://host.docker.internal:8082}"
+SCHEMA_REGISTRY="${SCHEMA_REGISTRY:-http://host.docker.internal:8085}"
 ICEBERG_REST="${ICEBERG_REST:-http://host.docker.internal:8181}"
 MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://host.docker.internal:9000}"
 
@@ -1646,7 +1646,7 @@ Note: The Flink Kubernetes Operator overrides pod template `command`/`args` for 
 | K8s Service | Service Port | Target Port (host) | Docker Compose Service |
 |---|---|---|---|
 | `kafka` | 9092 | 39092 | Kafka `PLAINTEXT_K8S` listener |
-| `schema-registry` | 8081 | 8082 | Confluent Schema Registry |
+| `schema-registry` | 8081 | 8085 | Confluent Schema Registry |
 | `iceberg-rest` | 8181 | 8181 | Iceberg REST Catalog |
 | `minio` | 9000 | 9000 | MinIO S3 API |
 
@@ -1702,7 +1702,7 @@ All ports used for Kubernetes pod access to Docker Compose services:
 | Service | Docker Compose Port | Application Mode Access | Session Mode Access | Protocol |
 |---|---|---|---|---|
 | Kafka | 39092 | `host.docker.internal:39092` | `kafka:9092` (K8s Service) | PLAINTEXT |
-| Schema Registry | 8082 | `host.docker.internal:8082` | `schema-registry:8081` (K8s Service) | HTTP |
+| Schema Registry | 8085 | `host.docker.internal:8085` | `schema-registry:8081` (K8s Service) | HTTP |
 | Iceberg REST Catalog | 8181 | `host.docker.internal:8181` | `iceberg-rest:8181` (K8s Service) | HTTP |
 | MinIO (S3 API) | 9000 | `host.docker.internal:9000` | `minio:9000` (K8s Service) | HTTP |
 | Gitea | 3000 | `host.docker.internal:3000` | `host.docker.internal:3000` | HTTP |

@@ -194,4 +194,17 @@ else
   kubectl port-forward svc/flink-session-rest -n flink 8081:8081 &>/dev/null &
 fi
 kubectl port-forward svc/argocd-server -n argocd 8443:443 &>/dev/null &
+
+echo ""
+echo "Port-forwards running in background:"
+if [ "$FLINK_MODE" = "application" ]; then
+  echo "    - Flink Ingestion:  http://localhost:8081"
+  echo "    - Flink Aggregation: http://localhost:8082"
+  echo "    - Flink Funnel:     http://localhost:8083"
+else
+  echo "    - Flink Session:    http://localhost:8081"
+fi
+echo "    - Argo CD:          https://localhost:8443"
+echo ""
+echo "Press Ctrl+C to stop port-forwards."
 wait

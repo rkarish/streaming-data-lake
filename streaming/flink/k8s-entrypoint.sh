@@ -2,7 +2,7 @@
 set -euo pipefail
 
 KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-host.docker.internal:39092}"
-SCHEMA_REGISTRY="${SCHEMA_REGISTRY:-http://host.docker.internal:8082}"
+SCHEMA_REGISTRY="${SCHEMA_REGISTRY:-http://host.docker.internal:8085}"
 ICEBERG_REST="${ICEBERG_REST:-http://host.docker.internal:8181}"
 MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://host.docker.internal:9000}"
 

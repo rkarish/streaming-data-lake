@@ -4,6 +4,8 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.StatementSet;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 
+import org.apache.flink.table.api.TableResult;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -68,7 +70,11 @@ public class SqlRunner {
                 if (upper.equals("END")) {
                     if (inStatementSet && statementSet != null) {
                         System.out.println("Executing STATEMENT SET...");
-                        statementSet.execute();
+                        TableResult result = statementSet.execute();
+                        // Block until the streaming job completes (or fails). In application
+                        // mode the cluster terminates when main() exits, so we must hold it
+                        // alive for the duration of the streaming job.
+                        result.await();
                         inStatementSet = false;
                         statementSet = null;
                     }

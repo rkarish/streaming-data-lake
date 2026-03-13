@@ -25,6 +25,15 @@ fi
 echo "=== Flink on Kubernetes Setup (${FLINK_MODE} mode) ==="
 echo ""
 
+# Verify dependencies
+if ! command -v htpasswd &>/dev/null; then
+  echo "ERROR: 'htpasswd' is required but not found."
+  echo "Install it with:"
+  echo "  macOS:  brew install httpd"
+  echo "  Ubuntu: sudo apt-get install apache2-utils"
+  exit 1
+fi
+
 # Verify kubectl context is docker-desktop
 CONTEXT=$(kubectl config current-context 2>/dev/null || true)
 if [ "$CONTEXT" != "docker-desktop" ]; then
