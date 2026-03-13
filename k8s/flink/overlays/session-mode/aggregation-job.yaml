@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aggregation-job
+  namespace: flink
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  labels:
+    app: flink-sql-job
+    job: aggregation
+    target.session: flink-session
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: flink-sql-job
+        job: aggregation
+        target.session: flink-session
+    spec:
+      serviceAccountName: flink
+      restartPolicy: OnFailure
+      containers:
+        - name: sql-client
+          image: adtech-flink:latest
+          imagePullPolicy: Never
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              SQL_DIR=/opt/flink/sql
+              FLINK_OPTS="-Drest.address=flink-session-rest.flink -Drest.port=8081"
+              echo "Submitting aggregation jobs..."
+              cat "$SQL_DIR/create_tables.sql" "$SQL_DIR/aggregation_jobs.sql" > /tmp/combined.sql
+              /opt/flink/bin/sql-client.sh -f /tmp/combined.sql $FLINK_OPTS
+              echo "Aggregation job submitted successfully."
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: admin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: password
+            - name: AWS_REGION
+              value: us-east-1

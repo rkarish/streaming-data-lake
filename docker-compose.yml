@@ -5,14 +5,15 @@ services:
     hostname: kafka
     ports:
       - "29092:29092"
+      - "39092:39092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092,PLAINTEXT_K8S://:39092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092,PLAINTEXT_K8S://host.docker.internal:39092
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT_K8S:PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -72,7 +73,7 @@ services:
     image: confluentinc/cp-schema-registry:7.8.0
     container_name: schema-registry
     ports:
-      - "8082:8081"
+      - "8085:8081"
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
@@ -142,51 +143,6 @@ services:
       retries: 5
       start_period: 20s
 
-  flink-jobmanager:
-    build: ./streaming/flink
-    ports:
-      - "8081:8081"
-    command: jobmanager
-    depends_on:
-      kafka:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      iceberg-rest:
-        condition: service_healthy
-    environment:
-      FLINK_PROPERTIES: |
-        jobmanager.rpc.address: flink-jobmanager
-        state.checkpoints.dir: s3://warehouse/checkpoints/
-        s3.endpoint: http://minio:9000
-        s3.path.style.access: true
-        s3.access-key: admin
-        s3.secret-key: password
-      AWS_ACCESS_KEY_ID: admin
-      AWS_SECRET_ACCESS_KEY: password
-      AWS_REGION: us-east-1
-    volumes:
-      - ./streaming/flink/sql:/opt/flink/sql
-      - ./streaming/flink/submit-sql-job.sh:/opt/flink/submit-sql-job.sh
-
-  flink-taskmanager:
-    build: ./streaming/flink
-    command: taskmanager
-    depends_on:
-      - flink-jobmanager
-    environment:
-      FLINK_PROPERTIES: |
-        jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 4
-        state.checkpoints.dir: s3://warehouse/checkpoints/
-        s3.endpoint: http://minio:9000
-        s3.path.style.access: true
-        s3.access-key: admin
-        s3.secret-key: password
-      AWS_ACCESS_KEY_ID: admin
-      AWS_SECRET_ACCESS_KEY: password
-      AWS_REGION: us-east-1
-
   cloudbeaver:
     image: dbeaver/cloudbeaver:latest
     container_name: cloudbeaver
@@ -245,5 +201,25 @@ services:
       retries: 10
       start_period: 60s
 
+  gitea:
+    image: gitea/gitea:1.23
+    container_name: gitea
+    ports:
+      - "3000:3000"
+    volumes:
+      - gitea-data:/data
+    environment:
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__ROOT_URL: http://localhost:3000
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__security__INSTALL_LOCK: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/api/v1/settings/api"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
 volumes:
   cloudbeaver-workspace:
+  gitea-data:

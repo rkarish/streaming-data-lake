@@ -11,14 +11,20 @@ set -euo pipefail
 #      - Core: db.bid_requests, bid_responses, impressions, clicks
 #      - Enriched/metrics: db.bid_requests_enriched, hourly_impressions_by_geo, rolling_metrics_by_bidder, hourly_funnel_by_publisher
 #      - Quality/serving: db.dq_rejected_events, dq_event_quality_hourly, bid_landscape_hourly, realtime_serving_metrics_1m, funnel_leakage_hourly
-#   4. Flink streaming job (Kafka -> Iceberg)
+#   4. Flink streaming jobs on Kubernetes (application or session mode)
 #   5. Trino connectivity verification
+#
+# Environment variables:
+#   FLINK_MODE  - "application" (default) or "session"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FLINK_MODE="${FLINK_MODE:-application}"
 #   6. CloudBeaver readiness check
 #   7. Superset readiness check and dashboard setup
 # =============================================================================
 
 ICEBERG_REST_URL="http://localhost:8181"
-SCHEMA_REGISTRY_URL="http://localhost:8082"
+SCHEMA_REGISTRY_URL="http://localhost:8085"
 
 # -----------------------------------------------------------------------------
 # Task 0: Wait for Schema Registry
@@ -721,44 +727,10 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Task 4: Submit Flink streaming job
+# Task 4: Deploy Flink streaming jobs on Kubernetes
 # -----------------------------------------------------------------------------
-echo "==> Checking for existing Flink jobs..."
-
-running_jobs=$(curl -s http://localhost:8081/jobs 2>/dev/null \
-  | python3 -c "import sys,json; jobs=json.load(sys.stdin).get('jobs',[]); print(sum(1 for j in jobs if j['status']=='RUNNING'))" 2>/dev/null || echo "0")
-
-if [ "$running_jobs" -ge 3 ]; then
-  echo "    Found ${running_jobs} running Flink job(s), assuming all pipelines are active."
-else
-  if [ "$running_jobs" -gt 0 ]; then
-    echo "    Found only ${running_jobs} running Flink job(s); expected at least 3 (ingestion, aggregation, funnel)."
-    echo "    Cancelling existing Flink jobs to recover from partial deployment..."
-    running_job_ids=$(curl -s http://localhost:8081/jobs 2>/dev/null \
-      | python3 -c "import sys,json; jobs=json.load(sys.stdin).get('jobs',[]); print('\n'.join(j['id'] for j in jobs if j['status']=='RUNNING'))" 2>/dev/null || true)
-    if [ -n "${running_job_ids}" ]; then
-      while IFS= read -r job_id; do
-        if [ -n "${job_id}" ]; then
-          echo "    Cancelling job ${job_id}..."
-          curl -s -X PATCH "http://localhost:8081/jobs/${job_id}?mode=cancel" > /dev/null
-        fi
-      done <<< "${running_job_ids}"
-      echo "    Waiting for running jobs to stop..."
-      for _ in $(seq 1 30); do
-        remaining=$(curl -s http://localhost:8081/jobs 2>/dev/null \
-          | python3 -c "import sys,json; jobs=json.load(sys.stdin).get('jobs',[]); print(sum(1 for j in jobs if j['status']=='RUNNING'))" 2>/dev/null || echo "0")
-        if [ "${remaining}" -eq 0 ]; then
-          break
-        fi
-        sleep 2
-      done
-    fi
-  fi
-
-  echo "==> Submitting Flink streaming jobs (ingestion + aggregation + funnel)..."
-  docker compose exec -T flink-jobmanager bash /opt/flink/submit-sql-job.sh
-  echo "    Flink streaming jobs submitted."
-fi
+echo "==> Deploying Flink streaming jobs on Kubernetes (${FLINK_MODE} mode)..."
+bash "$SCRIPT_DIR/../k8s/scripts/setup-k8s.sh" --mode "$FLINK_MODE"
 
 # -----------------------------------------------------------------------------
 # Task 5: Verify Trino connectivity
@@ -831,7 +803,7 @@ while [ $attempt -lt $max_attempts ]; do
     break
   fi
   echo "    Waiting for Superset... (attempt ${attempt}/${max_attempts})"
-  sleep 5
+  sleep 15
 done
 
 echo "==> Setting up Superset dashboards..."
@@ -843,7 +815,7 @@ echo "    Superset dashboards configured."
 # -----------------------------------------------------------------------------
 echo ""
 echo "==> Setup complete. Infrastructure is ready:"
-echo "    - Schema Registry: Avro schema governance (http://localhost:8082)"
+echo "    - Schema Registry: Avro schema governance (http://localhost:8085)"
 echo "    - Kafka topics:    bid-requests, bid-responses, impressions, clicks (3 partitions each)"
 echo "    - MinIO bucket:    s3://warehouse"
 echo "    - Iceberg tables:  db.bid_requests, db.bid_responses, db.impressions, db.clicks"
@@ -856,7 +828,41 @@ echo "                       db.dq_event_quality_hourly (quality KPIs)"
 echo "                       db.bid_landscape_hourly (auction density/price KPIs)"
 echo "                       db.realtime_serving_metrics_1m (low-latency serving metrics)"
 echo "                       db.funnel_leakage_hourly (stage leakage KPIs)"
-echo "    - Flink job:       Streaming Kafka -> Iceberg (check http://localhost:8081)"
+echo "    - Flink jobs:      Running on K8s (${FLINK_MODE} mode)"
+if [ "$FLINK_MODE" = "application" ]; then
+echo "    - Flink UI:        http://localhost:8081 (ingestion)"
+echo "                       http://localhost:8082 (aggregation)"
+echo "                       http://localhost:8083 (funnel)"
+else
+echo "    - Flink UI:        http://localhost:8081"
+fi
+echo "    - Argo CD UI:      https://localhost:8443 (admin / password)"
 echo "    - Trino:           Query engine ready (http://localhost:8080)"
 echo "    - CloudBeaver:     Web SQL IDE ready (http://localhost:8978)"
 echo "    - Superset:        Dashboards ready (http://localhost:8088)"
+
+# Start port-forwards
+pkill -f "kubectl port-forward.*-n flink" 2>/dev/null || true
+pkill -f "kubectl port-forward.*-n argocd" 2>/dev/null || true
+if [ "$FLINK_MODE" = "application" ]; then
+  kubectl port-forward svc/flink-ingestion-rest -n flink 8081:8081 &>/dev/null &
+  kubectl port-forward svc/flink-aggregation-rest -n flink 8082:8081 &>/dev/null &
+  kubectl port-forward svc/flink-funnel-rest -n flink 8083:8081 &>/dev/null &
+else
+  kubectl port-forward svc/flink-session-rest -n flink 8081:8081 &>/dev/null &
+fi
+kubectl port-forward svc/argocd-server -n argocd 8443:443 &>/dev/null &
+
+echo ""
+echo "Port-forwards running in background:"
+if [ "$FLINK_MODE" = "application" ]; then
+  echo "    - Flink Ingestion:  http://localhost:8081"
+  echo "    - Flink Aggregation: http://localhost:8082"
+  echo "    - Flink Funnel:     http://localhost:8083"
+else
+  echo "    - Flink Session:    http://localhost:8081"
+fi
+echo "    - Argo CD:          https://localhost:8443"
+echo ""
+echo "Press Ctrl+C to stop port-forwards."
+wait

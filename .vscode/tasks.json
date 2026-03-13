@@ -2,12 +2,13 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "reload-system",
+            "label": "reload-system (application-mode)",
             "type": "shell",
-            "command": "docker compose down && docker compose up -d && bash scripts/setup.sh",
+            "command": "bash k8s/scripts/teardown-k8s.sh; docker compose down && docker compose up -d && FLINK_MODE=application bash scripts/setup.sh",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
+            "isBackground": true,
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -16,12 +17,13 @@
             "problemMatcher": []
         },
         {
-            "label": "start-services",
+            "label": "reload-system (session-mode)",
             "type": "shell",
-            "command": "docker compose up -d",
+            "command": "bash k8s/scripts/teardown-k8s.sh; docker compose down && docker compose up -d && FLINK_MODE=session bash scripts/setup.sh",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
+            "isBackground": true,
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -30,9 +32,9 @@
             "problemMatcher": []
         },
         {
-            "label": "stop-services",
+            "label": "stop-system",
             "type": "shell",
-            "command": "docker compose down",
+            "command": "bash k8s/scripts/teardown-k8s.sh && docker compose --profile generator down",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
@@ -46,7 +48,7 @@
         {
             "label": "run-setup",
             "type": "shell",
-            "command": "bash scripts/setup.sh",
+            "command": "FLINK_MODE=${FLINK_MODE:-application} bash scripts/setup.sh",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
@@ -97,9 +99,9 @@
             "problemMatcher": []
         },
         {
-            "label": "submit-flink-jobs",
+            "label": "teardown-flink-k8s",
             "type": "shell",
-            "command": "docker compose exec -T flink-jobmanager bash /opt/flink/submit-sql-job.sh",
+            "command": "bash k8s/scripts/teardown-k8s.sh",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
@@ -141,7 +143,7 @@
         {
             "label": "view-flink-logs",
             "type": "shell",
-            "command": "docker compose logs -f --tail 100 flink-jobmanager flink-taskmanager",
+            "command": "kubectl logs -f -l app -n flink --all-containers --tail=100",
             "options": {
                 "cwd": "${workspaceFolder}"
             },

@@ -11,16 +11,22 @@ See [`.design/adtech-data-lake-streaming-platform.md`](.design/adtech-data-lake-
                      (Avro schemas)
                          ^
                          |
-Mock Data Gen  --->  Kafka (KRaft)
-   (Avro)                |
-                         v
-    +----------------------------------------------+
-    |                   Flink                      |
-    |                                              |
-    |  Core Funnel &    Streaming     Funnel       |
-    |  Enrichment Job   Aggregation   Metrics Job  |
-    +----------------------------------------------+
-                         |
+Mock Data Gen  --->  Kafka (KRaft)         ┌─ Docker Compose ───┐
+   (Avro)                |                 │  (infrastructure)  │
+                         |                 └────────┬───────────┘
+                         v                          |
+    ┌─ Kubernetes (Docker Desktop) ──────┐          |
+    |                                    | host.docker.internal
+    |  ┌────────────┐  ┌─────────────┐   |          |
+    |  | Ingestion  |  | Aggregation |   |<---------+
+    |  | Cluster    |  | Cluster     |   |
+    |  └────────────┘  └─────────────┘   |
+    |  ┌────────────┐  ┌─────────────┐   |
+    |  | Funnel     |  | Flink       |   |
+    |  | Cluster    |  | Operator    |   |
+    |  └────────────┘  └─────────────┘   |
+    |  Argo CD (GitOps)                  |
+    └────────────────────────────────────┘
                          |
               +----------+----------+
               |                     |
@@ -43,34 +49,40 @@ Mock Data Gen  --->  Kafka (KRaft)
 
 | Service | Image | Ports |
 |---|---|---|
-| `kafka` | `apache/kafka:3.8.1` (KRaft) | 29092 (host), 9092 (internal) |
-| `schema-registry` | `confluentinc/cp-schema-registry:7.8.0` | 8082 |
+| `kafka` | `apache/kafka:3.8.1` (KRaft) | 29092 (host), 39092 (K8s), 9092 (internal) |
+| `schema-registry` | `confluentinc/cp-schema-registry:7.8.0` | 8085 |
 | `minio` | `minio/minio:latest` | 9000 (S3), 9001 (console) |
 | `iceberg-rest` | `tabulario/iceberg-rest:1.6.0` | 8181 |
 | `mock-data-gen` | Custom (Python 3.12, Avro) | -- |
-| `flink-jobmanager` | Custom (Flink 1.20 + Iceberg) | 8081 (Web UI) |
-| `flink-taskmanager` | Custom (Flink 1.20 + Iceberg) | -- |
+| `gitea` | `gitea/gitea:1.23` (k8s profile) | 3000 |
 | `trino` | `trinodb/trino:467` | 8080 (Web UI) |
 | `cloudbeaver` | `dbeaver/cloudbeaver:latest` | 8978 (Web UI) |
 | `superset` | Custom (apache/superset + trino driver) | 8088 (Web UI) |
 | `superset-postgres` | `postgres:16-alpine` | internal only |
 
+**Kubernetes Services (Docker Desktop):**
+
+| Service | Mode | Description |
+|---|---|---|
+| Flink Operator | Both | Manages FlinkDeployment CRDs |
+| `flink-ingestion` | Application | Flink cluster for Kafka-to-Iceberg ingestion |
+| `flink-aggregation` | Application | Flink cluster for windowed aggregations |
+| `flink-funnel` | Application | Flink cluster for funnel metrics |
+| `flink-session` | Session | Single Flink cluster for all jobs |
+| `ingestion-job` / `aggregation-job` / `funnel-job` | Session | K8s Jobs that submit SQL via `sql-client.sh` |
+| `kafka`, `schema-registry`, `iceberg-rest`, `minio` | Session | K8s Services routing to Docker Compose on host |
+| Argo CD | Both | GitOps controller syncing from Gitea |
+| cert-manager | Both | TLS certificate management for operator |
+
 ## Prerequisites
 
 - Docker and Docker Compose
+- Docker Desktop with Kubernetes enabled (for Flink deployment)
+- `kubectl` and `helm` CLI tools
 - Python 3.12+ (for local development only)
   - On Ubuntu/Debian, also install `python3-venv`: `sudo apt install python3-venv`
 - `curl` (for setup script)
 - [Claude Code](https://claude.com/claude-code) with the `voltagent-data-ai` subagent (for AI-assisted development)
-
-### Claude Code Subagent Setup
-
-This project uses the `voltagent-data-ai:data-engineer` subagent for implementation and engineering tasks. Install it via the [VoltAgent plugin marketplace](https://github.com/VoltAgent/awesome-claude-code-subagents):
-
-```bash
-claude plugin marketplace add VoltAgent/awesome-claude-code-subagents
-claude plugin install voltagent-data-ai
-```
 
 ## Quick Start (Docker)
 
@@ -80,7 +92,7 @@ claude plugin install voltagent-data-ai
 docker compose up --build -d
 ```
 
-This starts the infrastructure services (Kafka, Schema Registry, MinIO, Iceberg, Flink, Trino, CloudBeaver, Superset) but **not** the mock data generator. To also start the generator (continuous event stream):
+This starts the infrastructure services (Kafka, Schema Registry, MinIO, Iceberg, Trino, CloudBeaver, Superset) but **not** the mock data generator or Flink (which runs on Kubernetes). To also start the generator (continuous event stream):
 
 ```bash
 docker compose --profile generator up --build -d
@@ -100,13 +112,48 @@ docker compose ps
 
 ### 2. Run the setup script
 
-Waits for Schema Registry, configures BACKWARD compatibility, creates Kafka topics, MinIO bucket, Iceberg namespace + tables, submits the Flink streaming job, and verifies Trino connectivity:
+Waits for Schema Registry, configures BACKWARD compatibility, creates Kafka topics, MinIO bucket, Iceberg namespace + tables, and verifies Trino connectivity:
 
 ```bash
 bash scripts/setup.sh
 ```
 
-### 3. Verify
+### 3. Deploy Flink on Kubernetes
+
+Flink streaming jobs run on Docker Desktop's Kubernetes cluster via the Flink Kubernetes Operator. Two deployment modes are available:
+
+**Application Mode** (default) -- 3 independent Flink clusters with full job isolation:
+
+```bash
+bash k8s/scripts/setup-k8s.sh
+```
+
+**Session Mode** -- single Flink cluster, lower resource usage:
+
+```bash
+bash k8s/scripts/setup-k8s.sh --mode session
+```
+
+Session mode deploys K8s Services (`kafka`, `schema-registry`, `iceberg-rest`, `minio`) that route to Docker Compose services, and submits SQL via Flink's built-in `sql-client.sh` through K8s Jobs.
+
+Verify Flink is running:
+
+```bash
+kubectl get flinkdeployments -n flink
+kubectl get pods -n flink
+```
+
+Access the Flink Web UI via port-forward (started automatically by the setup script):
+
+```bash
+# Application mode
+kubectl port-forward svc/flink-ingestion-rest -n flink 8081:8081
+# Session mode
+kubectl port-forward svc/flink-session-rest -n flink 8081:8081
+# Open http://localhost:8081
+```
+
+### 4. Verify
 
 Check that events are flowing through Kafka. Messages are Avro-encoded (binary), so `kafka-console-consumer` will show raw bytes. To verify message count, check topic offsets instead:
 
@@ -116,19 +163,11 @@ docker compose exec kafka /opt/kafka/bin/kafka-get-offsets.sh \
   --topic bid-requests
 ```
 
-Verify the Flink job is running:
-
-```bash
-curl -s http://localhost:8081/jobs | python3 -m json.tool
-```
-
 Check that Parquet files appear in MinIO (after the first checkpoint, ~60s):
 
 ```bash
 docker compose exec minio mc ls --recursive local/warehouse/db/bid_requests/
 ```
-
-Open the Flink Web UI at [http://localhost:8081](http://localhost:8081) to monitor records received/sent.
 
 Verify the Iceberg tables exist:
 
@@ -168,59 +207,13 @@ Verify schemas are registered in Schema Registry:
 
 ```bash
 # List all registered subjects
-curl -s http://localhost:8082/subjects | python3 -m json.tool
+curl -s http://localhost:8085/subjects | python3 -m json.tool
 
 # View the latest schema for a topic
-curl -s http://localhost:8082/subjects/bid-requests-value/versions/latest | python3 -m json.tool
+curl -s http://localhost:8085/subjects/bid-requests-value/versions/latest | python3 -m json.tool
 ```
 
-### 5. Query the Iceberg table (Flink SQL)
-
-Open a Flink SQL Client session:
-
-```bash
-docker compose exec flink-jobmanager /opt/flink/bin/sql-client.sh embedded
-```
-
-Register the Iceberg catalog (required each session):
-
-```sql
-CREATE CATALOG iceberg_catalog WITH (
-    'type' = 'iceberg',
-    'catalog-type' = 'rest',
-    'uri' = 'http://iceberg-rest:8181',
-    'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
-    's3.endpoint' = 'http://minio:9000',
-    's3.path-style-access' = 'true',
-    'warehouse' = 's3://warehouse/'
-);
-```
-
-Switch to batch mode (without this, queries run in streaming mode and never finish):
-
-```sql
-SET 'execution.runtime-mode' = 'batch';
-```
-
-Run queries:
-
-```sql
--- Preview rows
-SELECT * FROM iceberg_catalog.db.bid_requests LIMIT 10;
-
--- Count total records
-SELECT COUNT(*) FROM iceberg_catalog.db.bid_requests;
-
--- Aggregation example
-SELECT device_geo_country, COUNT(*) AS cnt
-FROM iceberg_catalog.db.bid_requests
-GROUP BY device_geo_country
-ORDER BY cnt DESC;
-```
-
-Type `QUIT;` to exit the SQL client.
-
-### 6. Query with Trino
+### 5. Query with Trino
 
 Trino provides a standard SQL interface to the Iceberg tables. Run an ad-hoc query:
 
@@ -237,7 +230,7 @@ bash scripts/query-examples.sh
 
 The Trino Web UI is available at [http://localhost:8080](http://localhost:8080) (no credentials required).
 
-### 7. Table Maintenance
+### 6. Table Maintenance
 
 Run Iceberg table maintenance (compaction, snapshot expiry, orphan cleanup) via Trino:
 
@@ -266,7 +259,7 @@ docker exec trino trino --catalog iceberg --schema db \
              LIMIT 10"
 ```
 
-### 8. CloudBeaver (Web SQL IDE)
+### 7. CloudBeaver (Web SQL IDE)
 
 Open [http://localhost:8978](http://localhost:8978). On the first launch you will need to complete the setup wizard:
 
@@ -277,7 +270,7 @@ Once configured, click the CloudBeaver logo in the top-left corner to reach the 
 
 The workspace is persisted in a Docker volume (`cloudbeaver-workspace`), so subsequent restarts will skip the wizard. After a restart, you will need to click the settings icon in the top-right corner, click "Log In", and sign in with the admin credentials you set during the wizard (e.g. `cbadmin` / `Password123!`).
 
-### 9. Superset (Charts & SQL Lab)
+### 8. Superset (Charts & SQL Lab)
 
 Open [http://localhost:8088](http://localhost:8088) and log in with `admin` / `password`. The setup script creates:
 
@@ -303,7 +296,7 @@ To re-run `setup-dashboards.py` after making changes (the script is bind-mounted
 docker exec superset python /app/setup-dashboards.py
 ```
 
-### 10. Stop
+### 9. Stop
 
 If the mock data generator is running, you must include the `generator` profile when stopping -- otherwise the generator container keeps running and holds the Docker network open:
 
@@ -313,6 +306,12 @@ docker compose --profile generator down
 
 If you haven't started the generator, a plain `docker compose down` is sufficient.
 
+To tear down the Kubernetes resources (Flink clusters, operator, cert-manager, Argo CD):
+
+```bash
+bash k8s/scripts/teardown-k8s.sh
+```
+
 ## Local Debug Environment
 
 You can debug the mock data generator locally in VS Code while keeping the infrastructure services in Docker.
@@ -320,8 +319,7 @@ You can debug the mock data generator locally in VS Code while keeping the infra
 ### 1. Build and start infrastructure services
 
 ```bash
-docker compose build flink-jobmanager flink-taskmanager
-docker compose up kafka schema-registry minio iceberg-rest trino flink-jobmanager flink-taskmanager -d
+docker compose up kafka schema-registry minio iceberg-rest trino -d
 ```
 
 Wait for all services to become healthy:
@@ -332,10 +330,16 @@ docker compose ps
 
 ### 2. Run the setup script
 
-Waits for Schema Registry, configures BACKWARD compatibility, creates Kafka topics, MinIO bucket, Iceberg namespace + tables, submits the Flink streaming job, and verifies Trino connectivity:
+Creates Kafka topics, MinIO bucket, Iceberg namespace + tables, and verifies Trino connectivity:
 
 ```bash
 bash scripts/setup.sh
+```
+
+Then deploy Flink on Kubernetes:
+
+```bash
+bash k8s/scripts/setup-k8s.sh
 ```
 
 ### 3. Set up the local debug environment
@@ -371,13 +375,19 @@ docker compose up superset -d
 
 ### 5. Verify the Flink pipeline
 
-Check that the Flink job is running:
+Check that the Flink jobs are running on Kubernetes:
 
 ```bash
-curl -s http://localhost:8081/jobs | python3 -m json.tool
+kubectl get flinkdeployments -n flink
+kubectl get pods -n flink
 ```
 
-Open the Flink Web UI at [http://localhost:8081](http://localhost:8081) to monitor records received/sent.
+Access the Flink Web UI via port-forward:
+
+```bash
+kubectl port-forward svc/flink-ingestion-rest -n flink 8081:8081
+# Open http://localhost:8081
+```
 
 After ~60 seconds (first Flink checkpoint), verify Parquet files are landing in MinIO:
 
@@ -393,7 +403,8 @@ Run any task via **Terminal > Run Task...** (or `Cmd+Shift+P` > "Tasks: Run Task
 
 | Task | Description |
 |---|---|
-| `reload-system` | Stop all services, restart, and run full setup |
+| `reload-system (application-mode)` | Stop all services, restart, and run full setup with Flink Application Mode (3 clusters) |
+| `reload-system (session-mode)` | Stop all services, restart, and run full setup with Flink Session Mode (1 cluster) |
 | `start-services` | Start all infrastructure services |
 | `stop-services` | Stop all services |
 | `run-setup` | Run the setup script (topics, bucket, tables, Flink jobs, Trino/Superset verification) |
@@ -410,7 +421,9 @@ Run any task via **Terminal > Run Task...** (or `Cmd+Shift+P` > "Tasks: Run Task
 
 | Task | Description |
 |---|---|
-| `submit-flink-jobs` | Resubmit all Flink SQL streaming jobs |
+| `deploy-flink-k8s (application-mode)` | Deploy Flink as 3 independent clusters on Kubernetes |
+| `deploy-flink-k8s (session-mode)` | Deploy Flink as 1 session cluster with 3 jobs on Kubernetes |
+| `teardown-flink-k8s` | Tear down Flink Kubernetes resources |
 | `run-table-maintenance` | Run Iceberg table maintenance (compaction, snapshot expiry, orphan cleanup) |
 | `run-query-examples` | Run sample analytical queries via Trino |
 
@@ -418,7 +431,7 @@ Run any task via **Terminal > Run Task...** (or `Cmd+Shift+P` > "Tasks: Run Task
 
 | Task | Description |
 |---|---|
-| `view-flink-logs` | Tail Flink jobmanager and taskmanager logs |
+| `view-flink-logs` | Tail Flink pod logs (kubectl logs) |
 | `view-kafka-logs` | Tail Kafka broker logs |
 | `view-generator-logs` | Tail mock data generator logs |
 
@@ -445,7 +458,7 @@ Run any task via **Terminal > Run Task...** (or `Cmd+Shift+P` > "Tasks: Run Task
 | Variable | Default | Description |
 |---|---|---|
 | `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` (Docker) / `localhost:29092` (local) | Kafka broker address |
-| `SCHEMA_REGISTRY_URL` | `http://schema-registry:8081` (Docker) / `http://localhost:8082` (local) | Confluent Schema Registry URL for Avro serialization |
+| `SCHEMA_REGISTRY_URL` | `http://schema-registry:8081` (Docker) / `http://localhost:8085` (local) | Confluent Schema Registry URL for Avro serialization |
 | `EVENTS_PER_SECOND` | `10` | Target bid-request throughput |
 | `TOPIC_BID_REQUESTS` | `bid-requests` | Kafka topic for bid requests |
 | `TOPIC_BID_RESPONSES` | `bid-responses` | Kafka topic for bid responses |
@@ -513,7 +526,31 @@ docker exec trino trino --execute \
 
 ### Flink Web UI
 
-Access the Flink dashboard at [http://localhost:8081](http://localhost:8081) to monitor running jobs, checkpoints, and task metrics.
+Flink runs on Kubernetes. Access the dashboard via port-forward:
+
+```bash
+kubectl port-forward svc/flink-ingestion-rest -n flink 8081:8081
+```
+
+Then open [http://localhost:8081](http://localhost:8081) to monitor running jobs, checkpoints, and task metrics. Replace `flink-ingestion` with `flink-aggregation` or `flink-funnel` to view other clusters.
+
+Note: The setup script starts port-forwards automatically in the background for both Flink (`:8081`) and Argo CD (`:8443`). If they get killed, re-run manually with the commands above.
+
+### Argo CD
+
+Access the Argo CD UI at [https://localhost:8443](https://localhost:8443). Credentials:
+- **Username**: `admin`
+- **Password**: `password` (set by `setup-k8s.sh`)
+
+### Gitea
+
+Local Git server for GitOps. Starts with all other services:
+
+```bash
+docker compose up gitea -d
+```
+
+Access at [http://localhost:3000](http://localhost:3000).
 
 ### Trino
 
@@ -553,17 +590,17 @@ Access the MinIO web console at [http://localhost:9001](http://localhost:9001) w
 
 ### Schema Registry
 
-The Confluent Schema Registry provides Avro schema governance with BACKWARD compatibility enforcement. The API is available at [http://localhost:8082](http://localhost:8082).
+The Confluent Schema Registry provides Avro schema governance with BACKWARD compatibility enforcement. The API is available at [http://localhost:8085](http://localhost:8085).
 
 ```bash
 # List all registered subjects
-curl -s http://localhost:8082/subjects | python3 -m json.tool
+curl -s http://localhost:8085/subjects | python3 -m json.tool
 
 # View the latest schema for a topic
-curl -s http://localhost:8082/subjects/bid-requests-value/versions/latest | python3 -m json.tool
+curl -s http://localhost:8085/subjects/bid-requests-value/versions/latest | python3 -m json.tool
 
 # Check global compatibility level
-curl -s http://localhost:8082/config | python3 -m json.tool
+curl -s http://localhost:8085/config | python3 -m json.tool
 ```
 
 Avro schema files (`.avsc`) are in `schemas/avro/` and are bind-mounted into the mock data generator container.
@@ -590,7 +627,7 @@ Access Superset at [http://localhost:8088](http://localhost:8088) with credentia
 streaming-data-lake/
   .design/
     adtech-streaming-platform.md   # Design document
-  docker-compose.yml               # All local services
+  docker-compose.yml               # Infrastructure services (Kafka, MinIO, Trino, etc.)
   schemas/
     avro/
       bid_request.avsc             # Avro schema for bid requests
@@ -606,13 +643,29 @@ streaming-data-lake/
       generator.py                 # Kafka producer loop
   streaming/
     flink/
-      Dockerfile                   # Custom Flink 1.20 image with Iceberg JARs
-      submit-sql-job.sh            # Waits for deps, submits SQL job
+      Dockerfile                   # Custom Flink 1.20 image with Iceberg JARs + SQL Runner
+      k8s-entrypoint.sh            # Endpoint parameterization for Application Mode
+      sql-runner/                  # Java app for Flink Application Mode (session mode uses sql-client.sh)
+        pom.xml
+        src/main/java/.../SqlRunner.java
       sql/
         create_tables.sql          # Flink SQL DDL (catalogs + source/sink tables)
         insert_jobs.sql            # Flink SQL DML (streaming inserts)
         aggregation_jobs.sql       # Windowed aggregations (hourly geo, rolling bidder metrics)
         funnel_jobs.sql            # 4-way interval join funnel metrics by publisher
+  k8s/
+    flink/
+      base/                        # Kustomize base (namespace, RBAC, external K8s Services + Endpoints)
+      overlays/
+        application-mode/          # 3 independent FlinkDeployment clusters
+        session-mode/              # Single session cluster + 3 K8s Jobs (sql-client.sh)
+      operator/
+        values.yaml                # Flink Operator Helm values
+    argocd/
+      application.yaml             # Argo CD Application CRD
+    scripts/
+      setup-k8s.sh                 # Full K8s setup (cert-manager, operator, Flink, Argo CD)
+      teardown-k8s.sh              # Clean teardown of all K8s resources
   trino/
     catalog/
       iceberg.properties           # Iceberg connector config for Trino
@@ -625,7 +678,7 @@ streaming-data-lake/
     bootstrap.sh                   # DB migration, admin creation, server start
     setup-dashboards.py            # REST API script to create dashboards
   scripts/
-    setup.sh                       # Schema Registry, 4 topics, bucket, core/enriched/quality/aggregate tables, Flink jobs, verify Trino, setup dashboards
+    setup.sh                       # Schema Registry, topics, bucket, tables, verify Trino, dashboards
     setup-generator-local-debug.sh # Set up local .venv for debugging the generator
     query-examples.sh              # Sample analytical queries via Trino
     maintenance.sh                 # Iceberg table maintenance for all core/enriched/quality/aggregate tables

@@ -22,7 +22,7 @@
         "DUPLICATE_IMPRESSION_RATE": "0.01",
         "DUPLICATE_CLICK_RATE": "0.01",
         "AVRO_SCHEMA_DIR": "${workspaceFolder}/schemas/avro",
-        "SCHEMA_REGISTRY_URL": "http://localhost:8082"
+        "SCHEMA_REGISTRY_URL": "http://localhost:8085"
       },
       "console": "integratedTerminal"
     },
@@ -48,7 +48,7 @@
         "DUPLICATE_CLICK_RATE": "0.01",
         "BACKFILL_HOURS": "1",
         "AVRO_SCHEMA_DIR": "${workspaceFolder}/schemas/avro",
-        "SCHEMA_REGISTRY_URL": "http://localhost:8082"
+        "SCHEMA_REGISTRY_URL": "http://localhost:8085"
       },
       "console": "integratedTerminal"
     },
@@ -74,7 +74,7 @@
         "DUPLICATE_CLICK_RATE": "0.01",
         "BACKFILL_HOURS": "2",
         "AVRO_SCHEMA_DIR": "${workspaceFolder}/schemas/avro",
-        "SCHEMA_REGISTRY_URL": "http://localhost:8082"
+        "SCHEMA_REGISTRY_URL": "http://localhost:8085"
       },
       "console": "integratedTerminal"
     },

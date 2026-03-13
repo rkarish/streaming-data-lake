@@ -345,7 +345,7 @@ parsed.writeStream \
 | Service | Image / Base | Port | Purpose |
 |---|---|---|---|
 | `kafka` | `apache/kafka` (KRaft) | 9092 | Message broker, no ZooKeeper |
-| `schema-registry` | `confluentinc/cp-schema-registry:7.8.0` | 8082 | Avro schema governance & compatibility |
+| `schema-registry` | `confluentinc/cp-schema-registry:7.8.0` | 8085 | Avro schema governance & compatibility |
 | `mock-data-gen` | Custom (Python) | -- | Generates OpenRTB events to Kafka |
 | `iceberg-rest` | `tabulario/iceberg-rest` | 8181 | Iceberg REST catalog |
 | `minio` | `minio/minio` | 9000/9001 | S3-compatible object storage |
@@ -938,7 +938,7 @@ Schema Registry with Avro serialization solves all three problems by providing a
 
 #### 8.2 Schema Registry Integration
 
-**Service**: Confluent Schema Registry (`confluentinc/cp-schema-registry:7.8.0`) is already included in the Docker Compose stack, exposed on host port 8082.
+**Service**: Confluent Schema Registry (`confluentinc/cp-schema-registry:7.8.0`) is already included in the Docker Compose stack, exposed on host port 8085.
 
 **Compatibility mode**: `BACKWARD` (default). This means new schemas can:
 - Add fields with default values
@@ -1244,6 +1244,502 @@ Extend maintenance coverage beyond the 4 core append tables:
 | `scripts/setup.sh` | Create new Iceberg tables and submit expanded Flink SQL jobs |
 | `scripts/query-examples.sh` | Add quality, leakage, and auction-fidelity analytical queries |
 | `scripts/maintenance.sh` | Include all enriched, aggregation, funnel, and Phase 9 tables with policy-specific maintenance |
+
+### Phase 10: Flink on Kubernetes with GitOps
+
+#### 10.1 Overview & Motivation
+
+The Docker Compose deployment serves well for local development and single-machine testing, but it conflates infrastructure lifecycle with job lifecycle. All Flink jobs share a single JobManager/TaskManager pair, SQL is submitted via `docker exec` into an ephemeral SQL Client session, and there is no declarative way to version, deploy, or roll back individual streaming jobs.
+
+Moving Flink to Kubernetes addresses these gaps:
+
+- **Independent job lifecycle**: Each Flink job runs as its own Kubernetes deployment with dedicated JobManager and TaskManagers, enabling independent scaling, upgrades, and restarts without affecting other jobs.
+- **Operator-managed upgrades**: The Flink Kubernetes Operator handles savepoint-based upgrades, health monitoring, and automatic restart on failure -- capabilities that require manual scripting in Docker Compose.
+- **GitOps deployment model**: Argo CD watches a Git repository (Gitea, running locally) and automatically syncs Kubernetes manifests, providing an auditable, declarative deployment pipeline.
+- **Production-realistic topology**: Application Mode (one cluster per job) mirrors how production Flink deployments run on managed Kubernetes services (EKS, GKE), making the local setup a closer analog to cloud deployment.
+
+#### 10.2 Architecture
+
+The migration follows a **split-plane** design: infrastructure services remain in Docker Compose while Flink workloads move to Kubernetes (Docker Desktop's built-in cluster).
+
+```
+┌─────────────────────────────────────────────────┐
+│                    Docker Compose               │
+│                                                 │
+│  Kafka (:29092)    Schema Registry (:8085)      │
+│  MinIO (:9000)     Iceberg REST (:8181)         │
+│  Trino (:8080)     CloudBeaver (:8978)          │
+│  Superset (:8088)  Mock Data Generator          │
+│  Gitea (:3000)     [k8s profile only]           │
+│                                                 │
+└──────────────────────┬──────────────────────────┘
+                       │ host.docker.internal
+                       │
+┌──────────────────────▼──────────────────────────┐
+│              Kubernetes (Docker Desktop)        │
+│                                                 │
+│  ┌─────────────────┐  ┌──────────────────┐      │
+│  │ Flink Operator  │  │ cert-manager     │      │
+│  └─────────────────┘  └──────────────────┘      │
+│                                                 │
+│  ┌──────────────────┐  ┌──────────────────┐     │
+│  │ Ingestion Cluster│  │ Aggregation      │     │
+│  │ (JM + 1 TM)      │  │ Cluster          │     │
+│  └──────────────────┘  │ aggregation_     │     │
+│                        │ jobs.sql         │     │
+│  ┌─────────────────┐   └──────────────────┘     │
+│  │ Funnel Cluster  │                            │
+│  │ (JM + 1 TM)     │  ┌──────────────────┐      │
+│  │ funnel_jobs.sql │  │ Argo CD          │      │
+│  └─────────────────┘  └──────────────────┘      │
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+**Connectivity**: The split-plane architecture requires cross-network routing between Kubernetes pods and Docker Compose services. Two mechanisms are used:
+
+- **Application Mode**: An entrypoint script (`k8s-entrypoint.sh`) rewrites SQL file hostnames to `host.docker.internal` addresses before the SQL Runner executes them (see 10.9).
+- **Session Mode**: Kubernetes Services with manual Endpoints provide transparent DNS-based routing. Flink SQL references `kafka:9092`, `schema-registry:8081`, etc. -- the same hostnames as Docker Compose -- and K8s Services translate these to the correct host-exposed ports (e.g., `kafka:9092` → `host.docker.internal:39092`). This eliminates the need for endpoint rewriting in session mode.
+
+#### 10.3 SQL Runner (Application Mode Entry Point)
+
+Flink's Application Mode requires a Java `main()` method rather than an interactive SQL Client session. A thin Java application serves as the entry point:
+
+```java
+public class SqlRunner {
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        StreamTableEnvironment tableEnv = StreamTableEnvironment.create(env);
+
+        // Read SQL file path from args or environment
+        String sqlFile = args.length > 0 ? args[0] : System.getenv("SQL_FILE");
+        String sql = Files.readString(Path.of(sqlFile));
+
+        // Split on semicolons and execute each statement
+        for (String statement : sql.split(";")) {
+            String trimmed = statement.trim();
+            if (!trimmed.isEmpty()) {
+                tableEnv.executeSql(trimmed);
+            }
+        }
+    }
+}
+```
+
+The SQL Runner is packaged as a fat JAR (`flink-sql-runner.jar`) containing the application code plus all required dependencies (Iceberg, Kafka connector, Avro format, S3 filesystem). This JAR is baked into the Flink Docker image used by the Kubernetes operator.
+
+**Dockerfile** (extends the existing Flink image):
+```dockerfile
+FROM flink:1.20-java17
+
+# Copy dependency JARs (same as existing Docker Compose image)
+COPY lib/*.jar $FLINK_HOME/lib/
+
+# Copy SQL Runner fat JAR
+COPY flink-sql-runner.jar $FLINK_HOME/usrlib/flink-sql-runner.jar
+
+# Copy SQL files
+COPY sql/ $FLINK_HOME/sql/
+
+# Copy K8s entrypoint for endpoint parameterization
+COPY k8s-entrypoint.sh /opt/k8s-entrypoint.sh
+RUN chmod +x /opt/k8s-entrypoint.sh
+```
+
+#### 10.4 Flink Kubernetes Operator
+
+The [Flink Kubernetes Operator](https://nightlies.apache.org/flink/flink-kubernetes-operator-docs-stable/) manages Flink deployments via a `FlinkDeployment` Custom Resource Definition (CRD). It handles:
+
+- Job submission and lifecycle (start, stop, savepoint, upgrade)
+- Health monitoring and automatic restart on failure
+- Savepoint management for stateful upgrades
+- Resource scaling
+
+**Prerequisites**:
+- **cert-manager**: Required by the operator's webhook server for TLS certificate management. Installed via its standard Kubernetes manifest.
+- **Flink Kubernetes Operator Helm chart**: Installed into the `flink-operator` namespace.
+
+```bash
+# Install cert-manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.2/cert-manager.yaml
+
+# Install Flink Kubernetes Operator
+helm repo add flink-operator https://archive.apache.org/dist/flink/flink-kubernetes-operator-1.11.0/
+helm install flink-kubernetes-operator flink-operator/flink-kubernetes-operator \
+  --namespace flink-operator --create-namespace
+```
+
+#### 10.5 Cluster Topology Options
+
+Two deployment topologies are supported via Kustomize overlays:
+
+**Option A: Application Mode (default, recommended)**
+
+Each SQL job group runs as an independent Flink cluster with its own JobManager and TaskManagers. This provides full isolation -- a failing funnel job cannot affect ingestion.
+
+| Cluster | SQL Files | Task Slots |
+|---|---|---|
+| `flink-ingestion` | `create_tables.sql` + `insert_jobs.sql` | 4 |
+| `flink-aggregation` | `create_tables.sql` + `aggregation_jobs.sql` | 4 |
+| `flink-funnel` | `create_tables.sql` + `funnel_jobs.sql` | 4 |
+
+**Option B: Session Mode**
+
+A single Flink cluster runs all jobs. Uses fewer resources but sacrifices isolation. Useful for resource-constrained development machines. Jobs are submitted via Kubernetes `Job` resources that run Flink's built-in `sql-client.sh` to submit SQL to the session cluster's REST API.
+
+| Component | Kind | SQL Files | Task Slots |
+|---|---|---|---|
+| `flink-session` | `FlinkDeployment` | -- (cluster only) | 8 |
+| `ingestion-job` | K8s `Job` | `create_tables.sql` + `insert_jobs.sql` | -- |
+| `aggregation-job` | K8s `Job` | `create_tables.sql` + `aggregation_jobs.sql` | -- |
+| `funnel-job` | K8s `Job` | `create_tables.sql` + `funnel_jobs.sql` | -- |
+
+Session mode also deploys Kubernetes Services (`kafka`, `schema-registry`, `iceberg-rest`, `minio`) that route traffic to the Docker Compose services on the host, allowing Flink SQL to use the same hostnames as Docker Compose without endpoint rewriting.
+
+Kustomize selects the topology:
+```bash
+# Application Mode (3 clusters)
+kubectl apply -k k8s/flink/overlays/application-mode/
+
+# Session Mode (1 cluster + 3 jobs)
+kubectl apply -k k8s/flink/overlays/session-mode/
+```
+
+#### 10.6 FlinkDeployment CRD Examples
+
+**Application Mode** (`flink-ingestion` cluster):
+```yaml
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: flink-ingestion
+  namespace: flink
+spec:
+  image: adtech-flink:latest
+  flinkVersion: v1_20
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "4"
+    state.checkpoints.dir: s3://warehouse/checkpoints/ingestion
+    s3.endpoint: http://host.docker.internal:9000
+    s3.access-key: minioadmin
+    s3.secret-key: minioadmin
+    s3.path.style.access: "true"
+  serviceAccount: flink
+  jobManager:
+    resource:
+      memory: "1024m"
+      cpu: 0.5
+  taskManager:
+    resource:
+      memory: "2048m"
+      cpu: 1
+  job:
+    jarURI: local:///opt/flink/usrlib/flink-sql-runner.jar
+    args:
+      - "/opt/flink/sql/create_tables.sql"
+      - "/opt/flink/sql/insert_jobs.sql"
+    parallelism: 1
+    upgradeMode: savepoint
+    state: running
+```
+
+**Session Mode** (single cluster):
+```yaml
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: flink-session
+  namespace: flink
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  image: adtech-flink:latest
+  imagePullPolicy: Never
+  flinkVersion: v1_20
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "8"
+    s3.endpoint: http://minio:9000
+    s3.path.style.access: "true"
+    s3.access-key: admin
+    s3.secret-key: password
+  serviceAccount: flink
+  jobManager:
+    resource:
+      memory: "1536m"
+      cpu: 0.5
+  taskManager:
+    resource:
+      memory: "4096m"
+      cpu: 2
+```
+
+Note that session mode uses `http://minio:9000` (a K8s Service) rather than `http://host.docker.internal:9000` because the base kustomization deploys external Services that transparently route to the host.
+
+Session Mode jobs are submitted via Kubernetes `Job` resources that use Flink's built-in `sql-client.sh` to submit SQL to the session cluster's REST endpoint. This avoids the SQL Runner JAR entirely for session mode -- `sql-client.sh` handles all Flink SQL syntax natively, including `EXECUTE STATEMENT SET BEGIN...END;` blocks.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingestion-job
+  namespace: flink
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      serviceAccountName: flink
+      restartPolicy: OnFailure
+      containers:
+        - name: sql-client
+          image: adtech-flink:latest
+          imagePullPolicy: Never
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              SQL_DIR=/opt/flink/sql
+              FLINK_OPTS="-Drest.address=flink-session-rest.flink -Drest.port=8081"
+              cat "$SQL_DIR/create_tables.sql" "$SQL_DIR/insert_jobs.sql" > /tmp/combined.sql
+              /opt/flink/bin/sql-client.sh -f /tmp/combined.sql $FLINK_OPTS
+```
+
+SQL files are concatenated (`cat a.sql b.sql > combined.sql`) because `sql-client.sh -f` runs in a single session -- temporary tables from the DDL file must be visible when the DML file executes. The `-i` init flag does not work reliably with `-f`.
+
+#### 10.7 Kafka Listener Changes
+
+Kafka needs a new listener for pods running inside Kubernetes. Docker Desktop pods reach the host via `host.docker.internal`, so the broker must advertise on a port that maps through to the container.
+
+**New listener in `docker-compose.yml`**:
+
+| Listener | Address | Purpose |
+|---|---|---|
+| `PLAINTEXT` | `kafka:9092` | Inter-container (Docker Compose services) |
+| `PLAINTEXT_HOST` | `localhost:29092` | Host machine access |
+| `PLAINTEXT_K8S` | `host.docker.internal:39092` | Kubernetes pod access |
+
+```yaml
+kafka:
+  environment:
+    KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092,PLAINTEXT_K8S://0.0.0.0:39092
+    KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092,PLAINTEXT_K8S://host.docker.internal:39092
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT_K8S:PLAINTEXT
+  ports:
+    - "29092:29092"
+    - "39092:39092"
+```
+
+The Flink SQL table DDLs reference `host.docker.internal:39092` as the bootstrap server when running in Application Mode (parameterized via the entrypoint script, see 10.9). In Session Mode, K8s Services provide transparent port translation so SQL files use `kafka:9092` unchanged.
+
+#### 10.8 Argo CD + Gitea (Local GitOps)
+
+**Gitea** provides a local Git server so that Argo CD has a repository to watch without requiring an external GitHub/GitLab connection.
+
+**Gitea in Docker Compose** (added under a `k8s` profile so it only starts when needed):
+```yaml
+services:
+  gitea:
+    image: gitea/gitea:1.23
+    profiles: ["k8s"]
+    ports:
+      - "3000:3000"
+    volumes:
+      - gitea-data:/data
+    environment:
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__ROOT_URL: http://localhost:3000
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__security__INSTALL_LOCK: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/api/v1/settings/api"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+```
+
+The `INSTALL_LOCK` environment variable skips the Gitea web installer, and the healthcheck allows `setup-k8s.sh` to wait for readiness before bootstrapping.
+
+**Automated Gitea Bootstrap** (`k8s/scripts/bootstrap-gitea.sh`):
+
+The `bootstrap-gitea.sh` script is called by `setup-k8s.sh` and fully automates the Gitea repository setup:
+
+1. Waits for Gitea to respond to API health checks
+2. Creates an admin user `adtech` via `gitea admin user create` inside the container (idempotent -- skips if the user already exists)
+3. Creates the `k8s-manifests` repository via the Gitea REST API (idempotent -- skips if the repo already exists)
+4. Copies the local `k8s/flink/` directory (both overlays) into a temporary Git repo and force-pushes to Gitea
+
+This ensures the GitOps loop is fully closed without any manual steps.
+
+**Argo CD** is installed into the Kubernetes cluster:
+```bash
+kubectl create namespace argocd
+kubectl apply -n argocd --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+
+**Argo CD Application CRD** (`k8s/argocd/application.yaml`):
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: flink-jobs
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: http://host.docker.internal:3000/adtech/k8s-manifests.git
+    targetRevision: main
+    path: flink/overlays/application-mode
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: flink
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+```
+
+The `path` field defaults to `flink/overlays/application-mode` in the template. During setup, `setup-k8s.sh` uses `sed` to substitute the correct overlay path based on the selected `--mode` (application or session) before applying the CRD.
+
+**Workflow**:
+1. `setup-k8s.sh` starts Gitea and runs `bootstrap-gitea.sh` to create the user, repo, and push manifests
+2. `setup-k8s.sh` installs Argo CD and applies the Application CRD with the correct overlay path
+3. Argo CD detects the manifests in Gitea (polling or webhook)
+4. Argo CD applies the manifests to the cluster
+5. Flink Operator reconciles the `FlinkDeployment` CRDs (triggering savepoint + restart if the job spec changed)
+6. Subsequent manifest changes pushed to Gitea are automatically synced by Argo CD
+
+#### 10.9 Endpoint Parameterization
+
+SQL files reference Docker Compose internal hostnames (`kafka:9092`, `schema-registry:8081`, etc.). When running on Kubernetes, these hostnames must resolve to the Docker Compose services running on the host.
+
+**Application Mode** uses a `k8s-entrypoint.sh` script that runs `sed` substitutions on the SQL files before the SQL Runner executes them:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-host.docker.internal:39092}"
+SCHEMA_REGISTRY="${SCHEMA_REGISTRY:-http://host.docker.internal:8085}"
+ICEBERG_REST="${ICEBERG_REST:-http://host.docker.internal:8181}"
+MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://host.docker.internal:9000}"
+
+for f in /opt/flink/sql/*.sql; do
+  sed -i \
+    -e "s|kafka:9092|${KAFKA_BOOTSTRAP}|g" \
+    -e "s|http://schema-registry:8081|${SCHEMA_REGISTRY}|g" \
+    -e "s|http://iceberg-rest:8181|${ICEBERG_REST}|g" \
+    -e "s|http://minio:9000|${MINIO_ENDPOINT}|g" \
+    "$f"
+done
+
+exec "$@"
+```
+
+Note: The Flink Kubernetes Operator overrides pod template `command`/`args` for the main container, so the entrypoint must be set via an init container in Application Mode (the operator generates its own entrypoint for JobManager/TaskManager containers).
+
+**Session Mode** takes a different approach: Kubernetes Services in the `flink` namespace mirror Docker Compose hostnames with transparent port translation. This means SQL files run unmodified -- `kafka:9092` resolves to a K8s Service that routes to `host.docker.internal:39092`.
+
+| K8s Service | Service Port | Target Port (host) | Docker Compose Service |
+|---|---|---|---|
+| `kafka` | 9092 | 39092 | Kafka `PLAINTEXT_K8S` listener |
+| `schema-registry` | 8081 | 8085 | Confluent Schema Registry |
+| `iceberg-rest` | 8181 | 8181 | Iceberg REST Catalog |
+| `minio` | 9000 | 9000 | MinIO S3 API |
+
+These Services are headless (no selector) with manually-managed Endpoints pointing to `192.168.65.254` (Docker Desktop's `host.docker.internal` IP). The Services are managed by Argo CD via the Kustomize base, but the Endpoints are applied by `setup-k8s.sh` because Argo CD excludes `Endpoints` resources by default (`resource.exclusions` in `argocd-cm`).
+
+#### 10.9.1 Argo CD Sync Waves
+
+Session mode uses Argo CD sync waves to ensure ordered deployment:
+
+| Wave | Resources | Purpose |
+|---|---|---|
+| `0` | K8s Services (`kafka`, `schema-registry`, `iceberg-rest`, `minio`) | DNS must be available before Flink starts |
+| `1` | `FlinkDeployment` (`flink-session`) | Session cluster must be running before jobs submit |
+| `2` | K8s Jobs (`ingestion-job`, `aggregation-job`, `funnel-job`) | Submit SQL after cluster is ready |
+
+#### 10.10 Directory Structure
+
+```
+k8s/
+├── flink/
+│   ├── base/
+│   │   ├── kustomization.yaml
+│   │   ├── namespace.yaml
+│   │   ├── serviceaccount.yaml
+│   │   ├── external-services.yaml    # K8s Services routing to Docker Compose (managed by Argo CD)
+│   │   └── external-endpoints.yaml   # Manual Endpoints for above Services (applied by setup script)
+│   ├── overlays/
+│   │   ├── application-mode/
+│   │   │   ├── kustomization.yaml
+│   │   │   ├── flink-ingestion.yaml
+│   │   │   ├── flink-aggregation.yaml
+│   │   │   └── flink-funnel.yaml
+│   │   └── session-mode/
+│   │       ├── kustomization.yaml
+│   │       ├── flink-session.yaml       # FlinkDeployment (sync wave 1)
+│   │       ├── ingestion-job.yaml       # K8s Job with sql-client.sh (sync wave 2)
+│   │       ├── aggregation-job.yaml     # K8s Job with sql-client.sh (sync wave 2)
+│   │       └── funnel-job.yaml          # K8s Job with sql-client.sh (sync wave 2)
+│   └── operator/
+│       └── values.yaml
+├── argocd/
+│   └── application.yaml
+└── scripts/
+    ├── bootstrap-gitea.sh
+    ├── setup-k8s.sh
+    └── teardown-k8s.sh
+```
+
+#### 10.11 Port Mapping Table
+
+All ports used for Kubernetes pod access to Docker Compose services:
+
+| Service | Docker Compose Port | Application Mode Access | Session Mode Access | Protocol |
+|---|---|---|---|---|
+| Kafka | 39092 | `host.docker.internal:39092` | `kafka:9092` (K8s Service) | PLAINTEXT |
+| Schema Registry | 8085 | `host.docker.internal:8085` | `schema-registry:8081` (K8s Service) | HTTP |
+| Iceberg REST Catalog | 8181 | `host.docker.internal:8181` | `iceberg-rest:8181` (K8s Service) | HTTP |
+| MinIO (S3 API) | 9000 | `host.docker.internal:9000` | `minio:9000` (K8s Service) | HTTP |
+| Gitea | 3000 | `host.docker.internal:3000` | `host.docker.internal:3000` | HTTP |
+| Flink UI | -- | `kubectl port-forward svc/flink-ingestion-rest 8081` | `kubectl port-forward svc/flink-session-rest 8081` | HTTP |
+| Argo CD UI | -- | `kubectl port-forward svc/argocd-server -n argocd 8443:443` | same | HTTPS |
+
+#### 10.12 Modified Files Summary
+
+| File | Status | Changes |
+|---|---|---|
+| `docker-compose.yml` | Modified | Add `PLAINTEXT_K8S` listener to Kafka, expose port 39092, add Gitea service under `k8s` profile |
+| `streaming/flink/Dockerfile` | Modified | Add SQL Runner JAR, copy `k8s-entrypoint.sh`, copy SQL files into image |
+| `streaming/flink/k8s-entrypoint.sh` | New | Endpoint parameterization script for Application Mode |
+| `streaming/flink/sql-runner/` | New | Java project for SQL Runner application (Maven, `SqlRunner.java`); used by Application Mode only |
+| `k8s/flink/base/` | New | Kustomize base: namespace, service account, external K8s Services + Endpoints |
+| `k8s/flink/base/external-services.yaml` | New | K8s Services (`kafka`, `schema-registry`, `iceberg-rest`, `minio`) with port translation for cross-network routing |
+| `k8s/flink/base/external-endpoints.yaml` | New | Manual Endpoints pointing to `192.168.65.254` (applied by setup script, not Argo CD) |
+| `k8s/flink/overlays/application-mode/` | New | Application Mode FlinkDeployment CRDs (3 clusters) |
+| `k8s/flink/overlays/session-mode/` | New | Session Mode FlinkDeployment + K8s Jobs using `sql-client.sh` with Argo CD sync waves |
+| `k8s/flink/operator/values.yaml` | New | Helm values override for Flink Operator |
+| `k8s/argocd/application.yaml` | New | Argo CD Application CRD pointing to Gitea |
+| `k8s/scripts/bootstrap-gitea.sh` | New | Automated Gitea user/repo creation and manifest push |
+| `k8s/scripts/setup-k8s.sh` | New | End-to-end K8s setup: cert-manager (with stale webhook cleanup), operator, namespaces, external Endpoints, Gitea bootstrap, Argo CD, image build |
+| `k8s/scripts/teardown-k8s.sh` | New | Clean teardown of all K8s resources |
+| `README.md` | Modified | Add Kubernetes deployment instructions, Argo CD/Gitea setup, and updated architecture diagram |
+
+#### 10.13 Migration from Docker Compose Flink
+
+The old Docker Compose Flink deployment (`flink-jobmanager`, `flink-taskmanager`, `submit-sql-job.sh`) has been fully replaced by the Kubernetes deployment:
+
+- **Removed**: `flink-jobmanager` and `flink-taskmanager` services from `docker-compose.yml`, `streaming/flink/submit-sql-job.sh`
+- **Replaced by**: FlinkDeployment CRDs managed by the Flink Kubernetes Operator (Application Mode uses the SQL Runner JAR; Session Mode uses `sql-client.sh` via K8s Jobs)
+- **Infrastructure unchanged**: All non-Flink Docker Compose services (Kafka, MinIO, Iceberg REST, Schema Registry, Trino, CloudBeaver, Superset) remain in Docker Compose
+- **Kafka listener added**: `PLAINTEXT_K8S` on port 39092 allows K8s pods to reach Kafka via `host.docker.internal`
+- **Gitea added**: Local Git server under `profiles: ["k8s"]` for Argo CD GitOps
+- **Shared SQL files**: Both deployment modes use the same SQL files in `streaming/flink/sql/`
+- **K8s Services for cross-network routing**: Session mode deploys headless Services (`kafka`, `schema-registry`, `iceberg-rest`, `minio`) with manual Endpoints, allowing Flink SQL to use Docker Compose hostnames without `sed`-based rewriting
 
 ### Forward-Looking
 
