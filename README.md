@@ -50,7 +50,7 @@ Mock Data Gen  --->  Kafka (KRaft)         ┌─ Docker Compose ───┐
 | Service | Image | Ports |
 |---|---|---|
 | `kafka` | `apache/kafka:3.8.1` (KRaft) | 29092 (host), 39092 (K8s), 9092 (internal) |
-| `schema-registry` | `confluentinc/cp-schema-registry:7.8.0` | 8082 |
+| `schema-registry` | `confluentinc/cp-schema-registry:7.8.0` | 8085 |
 | `minio` | `minio/minio:latest` | 9000 (S3), 9001 (console) |
 | `iceberg-rest` | `tabulario/iceberg-rest:1.6.0` | 8181 |
 | `mock-data-gen` | Custom (Python 3.12, Avro) | -- |
@@ -207,10 +207,10 @@ Verify schemas are registered in Schema Registry:
 
 ```bash
 # List all registered subjects
-curl -s http://localhost:8082/subjects | python3 -m json.tool
+curl -s http://localhost:8085/subjects | python3 -m json.tool
 
 # View the latest schema for a topic
-curl -s http://localhost:8082/subjects/bid-requests-value/versions/latest | python3 -m json.tool
+curl -s http://localhost:8085/subjects/bid-requests-value/versions/latest | python3 -m json.tool
 ```
 
 ### 5. Query with Trino
@@ -458,7 +458,7 @@ Run any task via **Terminal > Run Task...** (or `Cmd+Shift+P` > "Tasks: Run Task
 | Variable | Default | Description |
 |---|---|---|
 | `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` (Docker) / `localhost:29092` (local) | Kafka broker address |
-| `SCHEMA_REGISTRY_URL` | `http://schema-registry:8081` (Docker) / `http://localhost:8082` (local) | Confluent Schema Registry URL for Avro serialization |
+| `SCHEMA_REGISTRY_URL` | `http://schema-registry:8081` (Docker) / `http://localhost:8085` (local) | Confluent Schema Registry URL for Avro serialization |
 | `EVENTS_PER_SECOND` | `10` | Target bid-request throughput |
 | `TOPIC_BID_REQUESTS` | `bid-requests` | Kafka topic for bid requests |
 | `TOPIC_BID_RESPONSES` | `bid-responses` | Kafka topic for bid responses |
@@ -590,17 +590,17 @@ Access the MinIO web console at [http://localhost:9001](http://localhost:9001) w
 
 ### Schema Registry
 
-The Confluent Schema Registry provides Avro schema governance with BACKWARD compatibility enforcement. The API is available at [http://localhost:8082](http://localhost:8082).
+The Confluent Schema Registry provides Avro schema governance with BACKWARD compatibility enforcement. The API is available at [http://localhost:8085](http://localhost:8085).
 
 ```bash
 # List all registered subjects
-curl -s http://localhost:8082/subjects | python3 -m json.tool
+curl -s http://localhost:8085/subjects | python3 -m json.tool
 
 # View the latest schema for a topic
-curl -s http://localhost:8082/subjects/bid-requests-value/versions/latest | python3 -m json.tool
+curl -s http://localhost:8085/subjects/bid-requests-value/versions/latest | python3 -m json.tool
 
 # Check global compatibility level
-curl -s http://localhost:8082/config | python3 -m json.tool
+curl -s http://localhost:8085/config | python3 -m json.tool
 ```
 
 Avro schema files (`.avsc`) are in `schemas/avro/` and are bind-mounted into the mock data generator container.

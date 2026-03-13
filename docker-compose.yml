@@ -73,7 +73,7 @@ services:
     image: confluentinc/cp-schema-registry:7.8.0
     container_name: schema-registry
     ports:
-      - "8082:8081"
+      - "8085:8081"
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092

@@ -14,7 +14,7 @@ spec:
     state.checkpoints.dir: s3://warehouse/checkpoints/aggregation
     execution.checkpointing.savepoint-dir: s3://warehouse/savepoints/aggregation
     table.exec.state.ttl: "86400000"
-    s3.endpoint: http://host.docker.internal:9000
+    s3.endpoint: http://minio:9000
     s3.path.style.access: "true"
     s3.access-key: admin
     s3.secret-key: password
@@ -31,8 +31,6 @@ spec:
     spec:
       containers:
         - name: flink-main-container
-          command: ["/opt/k8s-entrypoint.sh"]
-          args: ["/docker-entrypoint.sh"]
           env:
             - name: AWS_ACCESS_KEY_ID
               value: admin

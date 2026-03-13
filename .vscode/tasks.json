@@ -4,10 +4,11 @@
         {
             "label": "reload-system (application-mode)",
             "type": "shell",
-            "command": "docker compose down && docker compose up -d && FLINK_MODE=application bash scripts/setup.sh",
+            "command": "bash k8s/scripts/teardown-k8s.sh; docker compose down && docker compose up -d && FLINK_MODE=application bash scripts/setup.sh",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
+            "isBackground": true,
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -18,10 +19,11 @@
         {
             "label": "reload-system (session-mode)",
             "type": "shell",
-            "command": "docker compose down && docker compose up -d && FLINK_MODE=session bash scripts/setup.sh",
+            "command": "bash k8s/scripts/teardown-k8s.sh; docker compose down && docker compose up -d && FLINK_MODE=session bash scripts/setup.sh",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
+            "isBackground": true,
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",
@@ -97,34 +99,6 @@
             "problemMatcher": []
         },
         {
-            "label": "deploy-flink-k8s (application-mode)",
-            "type": "shell",
-            "command": "bash k8s/scripts/setup-k8s.sh --mode application",
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "clear": true
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "deploy-flink-k8s (session-mode)",
-            "type": "shell",
-            "command": "bash k8s/scripts/setup-k8s.sh --mode session",
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "clear": true
-            },
-            "problemMatcher": []
-        },
-        {
             "label": "teardown-flink-k8s",
             "type": "shell",
             "command": "bash k8s/scripts/teardown-k8s.sh",
@@ -169,7 +143,7 @@
         {
             "label": "view-flink-logs",
             "type": "shell",
-            "command": "kubectl logs -f -l app=flink --all-containers -n flink --tail=100",
+            "command": "kubectl logs -f -l app -n flink --all-containers --tail=100",
             "options": {
                 "cwd": "${workspaceFolder}"
             },

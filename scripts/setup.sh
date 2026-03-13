@@ -24,7 +24,7 @@ FLINK_MODE="${FLINK_MODE:-application}"
 # =============================================================================
 
 ICEBERG_REST_URL="http://localhost:8181"
-SCHEMA_REGISTRY_URL="http://localhost:8082"
+SCHEMA_REGISTRY_URL="http://localhost:8085"
 
 # -----------------------------------------------------------------------------
 # Task 0: Wait for Schema Registry
@@ -815,7 +815,7 @@ echo "    Superset dashboards configured."
 # -----------------------------------------------------------------------------
 echo ""
 echo "==> Setup complete. Infrastructure is ready:"
-echo "    - Schema Registry: Avro schema governance (http://localhost:8082)"
+echo "    - Schema Registry: Avro schema governance (http://localhost:8085)"
 echo "    - Kafka topics:    bid-requests, bid-responses, impressions, clicks (3 partitions each)"
 echo "    - MinIO bucket:    s3://warehouse"
 echo "    - Iceberg tables:  db.bid_requests, db.bid_responses, db.impressions, db.clicks"
@@ -828,10 +828,28 @@ echo "                       db.dq_event_quality_hourly (quality KPIs)"
 echo "                       db.bid_landscape_hourly (auction density/price KPIs)"
 echo "                       db.realtime_serving_metrics_1m (low-latency serving metrics)"
 echo "                       db.funnel_leakage_hourly (stage leakage KPIs)"
-ARGOCD_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "unknown")
 echo "    - Flink jobs:      Running on K8s (${FLINK_MODE} mode)"
+if [ "$FLINK_MODE" = "application" ]; then
+echo "    - Flink UI:        http://localhost:8081 (ingestion)"
+echo "                       http://localhost:8082 (aggregation)"
+echo "                       http://localhost:8083 (funnel)"
+else
 echo "    - Flink UI:        http://localhost:8081"
-echo "    - Argo CD UI:      https://localhost:8443 (admin / ${ARGOCD_PASSWORD})"
+fi
+echo "    - Argo CD UI:      https://localhost:8443 (admin / password)"
 echo "    - Trino:           Query engine ready (http://localhost:8080)"
 echo "    - CloudBeaver:     Web SQL IDE ready (http://localhost:8978)"
 echo "    - Superset:        Dashboards ready (http://localhost:8088)"
+
+# Start port-forwards
+pkill -f "kubectl port-forward.*-n flink" 2>/dev/null || true
+pkill -f "kubectl port-forward.*-n argocd" 2>/dev/null || true
+if [ "$FLINK_MODE" = "application" ]; then
+  kubectl port-forward svc/flink-ingestion-rest -n flink 8081:8081 &>/dev/null &
+  kubectl port-forward svc/flink-aggregation-rest -n flink 8082:8081 &>/dev/null &
+  kubectl port-forward svc/flink-funnel-rest -n flink 8083:8081 &>/dev/null &
+else
+  kubectl port-forward svc/flink-session-rest -n flink 8081:8081 &>/dev/null &
+fi
+kubectl port-forward svc/argocd-server -n argocd 8443:443 &>/dev/null &
+wait

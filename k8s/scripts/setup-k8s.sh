@@ -68,6 +68,11 @@ docker rm "$CONTAINER_ID" >/dev/null
 echo ""
 
 echo "[3/6] Creating flink namespace and installing Flink Kubernetes Operator $FLINK_OPERATOR_VERSION..."
+# Wait for flink namespace to finish terminating from a previous run
+if kubectl get namespace flink -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Terminating; then
+  echo "  Waiting for flink namespace to finish terminating..."
+  kubectl wait --for=delete namespace/flink --timeout=120s 2>/dev/null || true
+fi
 kubectl create namespace flink 2>/dev/null || true
 helm repo add flink-operator "https://archive.apache.org/dist/flink/flink-kubernetes-operator-$FLINK_OPERATOR_VERSION/" --force-update
 helm upgrade --install flink-kubernetes-operator flink-operator/flink-kubernetes-operator \
@@ -79,16 +84,8 @@ echo "  Flink Operator is ready"
 echo ""
 
 echo "[4/6] Deploying Flink (${FLINK_MODE} mode)..."
-# Apply external Endpoints (excluded from Argo CD by default resource.exclusions)
 kubectl apply -f "$K8S_DIR/flink/base/external-endpoints.yaml"
-# Clean up the other mode's resources if they exist
-if [ "$FLINK_MODE" = "application" ]; then
-  kubectl delete -k "$K8S_DIR/flink/overlays/session-mode/" --ignore-not-found 2>/dev/null || true
-  kubectl apply -k "$K8S_DIR/flink/overlays/application-mode/"
-else
-  kubectl delete -k "$K8S_DIR/flink/overlays/application-mode/" --ignore-not-found 2>/dev/null || true
-  kubectl apply -k "$K8S_DIR/flink/overlays/session-mode/"
-fi
+kubectl apply -k "$K8S_DIR/flink/overlays/${FLINK_MODE}-mode/"
 echo ""
 
 echo "[5/6] Bootstrapping Gitea repository..."
@@ -105,7 +102,12 @@ else
 fi
 echo "  Waiting for Argo CD to be ready..."
 kubectl wait --for=condition=Available deployment/argocd-server -n argocd --timeout=180s
-echo "  Argo CD is ready"
+echo "  Setting Argo CD admin password..."
+ARGOCD_PASSWORD_HASH=$(htpasswd -nbBC 10 "" "password" | tr -d ':\n' | sed 's/$2y/$2a/')
+kubectl -n argocd patch secret argocd-secret -p "{\"stringData\":{\"admin.password\":\"${ARGOCD_PASSWORD_HASH}\",\"admin.passwordMtime\":\"$(date -u +%FT%TZ)\"}}"
+kubectl -n argocd rollout restart deployment argocd-server
+kubectl wait --for=condition=Available deployment/argocd-server -n argocd --timeout=120s
+echo "  Argo CD is ready (admin / password)"
 echo ""
 echo "  Applying Argo CD Application CRD..."
 ARGOCD_APP=$(mktemp)
@@ -114,23 +116,14 @@ kubectl apply -f "$ARGOCD_APP"
 rm -f "$ARGOCD_APP"
 echo ""
 
-# Kill any existing port-forwards from previous runs
-pkill -f "kubectl port-forward.*-n flink" 2>/dev/null || true
-pkill -f "kubectl port-forward.*-n argocd" 2>/dev/null || true
-
 echo "Waiting for Flink pods to be ready..."
 if [ "$FLINK_MODE" = "application" ]; then
-  FLINK_SVC="svc/flink-ingestion-rest"
   kubectl wait --for=condition=Ready pod -l app=flink-ingestion -n flink --timeout=180s 2>/dev/null || true
+  kubectl wait --for=condition=Ready pod -l app=flink-aggregation -n flink --timeout=180s 2>/dev/null || true
+  kubectl wait --for=condition=Ready pod -l app=flink-funnel -n flink --timeout=180s 2>/dev/null || true
 else
-  FLINK_SVC="svc/flink-session-rest"
   kubectl wait --for=condition=Ready pod -l app=flink-session -n flink --timeout=180s 2>/dev/null || true
 fi
 
-echo "Starting port-forwards in the background..."
-nohup kubectl port-forward "$FLINK_SVC" -n flink 8081:8081 &>/dev/null &
-echo "  Flink UI:   http://localhost:8081 (PID $!)"
-nohup kubectl port-forward svc/argocd-server -n argocd 8443:443 &>/dev/null &
-echo "  Argo CD UI: https://localhost:8443 (PID $!)"
-
 echo "  K8s setup complete (${FLINK_MODE} mode)"
+echo ""

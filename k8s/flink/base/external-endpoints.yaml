@@ -24,7 +24,7 @@ subsets:
   - addresses:
       - ip: 192.168.65.254
     ports:
-      - port: 8082
+      - port: 8085
 ---
 apiVersion: v1
 kind: Endpoints
