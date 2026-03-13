@@ -6,10 +6,6 @@ All design documents are located in the `.design/` directory. Review these befor
 
 - [AdTech Data Lake Streaming Platform](.design/adtech-data-lake-streaming-platform.md)
 
-## MCP Tools
-
-Use the `mcp__ide__getDiagnostics` tool to check for Pylance/linting errors after editing Python files. Pass the file URI (e.g., `file:///path/to/file.py`) to get diagnostics for a specific file, or omit it to get diagnostics for all open files.
-
 ## Coding Standards
 
 1. Do not use excessive whitespace in JSON data inside of shell scripts or in .sql files, new lines and indentation is fine.

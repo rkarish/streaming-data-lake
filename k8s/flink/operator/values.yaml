@@ -1,0 +1,16 @@
+watchNamespaces:
+  - flink
+
+operatorVolumes:
+  create: true
+  data:
+    - name: flink-usrlib
+      hostPath:
+        path: /tmp/flink/usrlib
+        type: DirectoryOrCreate
+
+operatorVolumeMounts:
+  create: true
+  data:
+    - name: flink-usrlib
+      mountPath: /opt/flink/usrlib/

@@ -1,0 +1,42 @@
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: flink-session
+  namespace: flink
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  image: adtech-flink:latest
+  imagePullPolicy: Never
+  flinkVersion: v1_20
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "8"
+    execution.checkpointing.interval: "60s"
+    execution.checkpointing.mode: EXACTLY_ONCE
+    state.checkpoints.dir: s3://warehouse/checkpoints/session
+    execution.checkpointing.savepoint-dir: s3://warehouse/savepoints/session
+    table.exec.state.ttl: "86400000"
+    s3.endpoint: http://minio:9000
+    s3.path.style.access: "true"
+    s3.access-key: admin
+    s3.secret-key: password
+  serviceAccount: flink
+  jobManager:
+    resource:
+      memory: "1536m"
+      cpu: 0.5
+  taskManager:
+    resource:
+      memory: "4096m"
+      cpu: 2
+  podTemplate:
+    spec:
+      containers:
+        - name: flink-main-container
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: admin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: password
+            - name: AWS_REGION
+              value: us-east-1

@@ -1,3 +1,11 @@
+# Build SQL Runner JAR
+FROM maven:3.9-eclipse-temurin-17 AS sql-runner-build
+WORKDIR /build
+COPY sql-runner/pom.xml .
+RUN mvn dependency:go-offline -q
+COPY sql-runner/src/ src/
+RUN mvn clean package -q -DskipTests
+
 FROM flink:1.20-java17
 
 # Download Iceberg Flink runtime JAR
@@ -26,3 +34,10 @@ RUN mkdir -p /opt/flink/plugins/s3-fs-hadoop && \
 
 # Copy SQL files into the image
 COPY sql/ /opt/flink/sql/
+
+# Copy SQL Runner JAR for Application Mode
+COPY --from=sql-runner-build /build/target/flink-sql-runner.jar /opt/flink/usrlib/flink-sql-runner.jar
+
+# Copy K8s entrypoint for endpoint parameterization
+COPY k8s-entrypoint.sh /opt/k8s-entrypoint.sh
+RUN chmod +x /opt/k8s-entrypoint.sh

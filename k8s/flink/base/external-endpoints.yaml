@@ -1,0 +1,53 @@
+# Manual Endpoints for external services running on the Docker Desktop host.
+# 192.168.65.254 is the host.docker.internal IP on Docker Desktop for Mac.
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: kafka
+  namespace: flink
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+subsets:
+  - addresses:
+      - ip: 192.168.65.254
+    ports:
+      - port: 39092
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: schema-registry
+  namespace: flink
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+subsets:
+  - addresses:
+      - ip: 192.168.65.254
+    ports:
+      - port: 8082
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: iceberg-rest
+  namespace: flink
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+subsets:
+  - addresses:
+      - ip: 192.168.65.254
+    ports:
+      - port: 8181
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: minio
+  namespace: flink
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+subsets:
+  - addresses:
+      - ip: 192.168.65.254
+    ports:
+      - port: 9000

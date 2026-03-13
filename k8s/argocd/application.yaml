@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: flink-jobs
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: http://host.docker.internal:3000/adtech/k8s-manifests.git
+    targetRevision: main
+    path: flink/overlays/application-mode
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: flink
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

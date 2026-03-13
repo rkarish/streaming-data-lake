@@ -1,0 +1,50 @@
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: flink-funnel
+  namespace: flink
+spec:
+  image: adtech-flink:latest
+  imagePullPolicy: Never
+  flinkVersion: v1_20
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "4"
+    execution.checkpointing.interval: "60s"
+    execution.checkpointing.mode: EXACTLY_ONCE
+    state.checkpoints.dir: s3://warehouse/checkpoints/funnel
+    execution.checkpointing.savepoint-dir: s3://warehouse/savepoints/funnel
+    table.exec.state.ttl: "86400000"
+    s3.endpoint: http://host.docker.internal:9000
+    s3.path.style.access: "true"
+    s3.access-key: admin
+    s3.secret-key: password
+  serviceAccount: flink
+  jobManager:
+    resource:
+      memory: "1024m"
+      cpu: 0.5
+  taskManager:
+    resource:
+      memory: "2048m"
+      cpu: 1
+  podTemplate:
+    spec:
+      containers:
+        - name: flink-main-container
+          command: ["/opt/k8s-entrypoint.sh"]
+          args: ["/docker-entrypoint.sh"]
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: admin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: password
+            - name: AWS_REGION
+              value: us-east-1
+  job:
+    jarURI: local:///opt/flink/usrlib/flink-sql-runner.jar
+    args:
+      - "/opt/flink/sql/create_tables.sql"
+      - "/opt/flink/sql/funnel_jobs.sql"
+    parallelism: 1
+    upgradeMode: savepoint
+    state: running
