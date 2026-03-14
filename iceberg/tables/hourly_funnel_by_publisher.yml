@@ -1,0 +1,30 @@
+namespace: db
+table: hourly_funnel_by_publisher
+format_version: 2
+schema:
+  - name: window_start
+    type: timestamp
+  - name: publisher_id
+    type: string
+  - name: bid_requests
+    type: long
+  - name: bid_responses
+    type: long
+  - name: impressions
+    type: long
+  - name: clicks
+    type: long
+  - name: fill_rate
+    type: double
+  - name: win_rate
+    type: double
+  - name: ctr
+    type: double
+partition_spec:
+  - transform: day
+    source: window_start
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - window_start
+  - publisher_id

@@ -1,0 +1,22 @@
+namespace: db
+table: hourly_impressions_by_geo
+format_version: 2
+schema:
+  - name: window_start
+    type: timestamp
+  - name: device_geo_country
+    type: string
+  - name: impression_count
+    type: long
+  - name: total_revenue
+    type: double
+  - name: avg_win_price
+    type: double
+partition_spec:
+  - transform: day
+    source: window_start
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - window_start
+  - device_geo_country

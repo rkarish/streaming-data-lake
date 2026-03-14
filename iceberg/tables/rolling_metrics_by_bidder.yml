@@ -1,0 +1,24 @@
+namespace: db
+table: rolling_metrics_by_bidder
+format_version: 2
+schema:
+  - name: window_start
+    type: timestamp
+  - name: window_end
+    type: timestamp
+  - name: bidder_id
+    type: string
+  - name: win_count
+    type: long
+  - name: revenue
+    type: double
+  - name: avg_cpm
+    type: double
+partition_spec:
+  - transform: day
+    source: window_start
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - window_start
+  - bidder_id

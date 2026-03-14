@@ -1,0 +1,53 @@
+namespace: db
+table: bid_requests
+format_version: 2
+schema:
+  - name: request_id
+    type: string
+  - name: imp_id
+    type: string
+  - name: imp_banner_w
+    type: int
+  - name: imp_banner_h
+    type: int
+  - name: imp_bidfloor
+    type: double
+  - name: site_id
+    type: string
+  - name: site_domain
+    type: string
+  - name: site_cat
+    type: list<string>
+  - name: publisher_id
+    type: string
+  - name: device_type
+    type: int
+  - name: device_os
+    type: string
+  - name: device_geo_country
+    type: string
+  - name: device_geo_region
+    type: string
+  - name: user_id
+    type: string
+  - name: auction_type
+    type: int
+  - name: tmax
+    type: int
+  - name: currency
+    type: string
+  - name: is_coppa
+    type: boolean
+  - name: is_gdpr
+    type: boolean
+  - name: event_timestamp
+    type: timestamptz
+  - name: received_at
+    type: timestamptz
+partition_spec:
+  - transform: day
+    source: event_timestamp
+  - transform: identity
+    source: device_geo_country
+properties: {}
+identifier_fields: []

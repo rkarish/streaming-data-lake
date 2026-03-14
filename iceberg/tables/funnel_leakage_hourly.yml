@@ -1,0 +1,28 @@
+namespace: db
+table: funnel_leakage_hourly
+format_version: 2
+schema:
+  - name: window_start
+    type: timestamp
+  - name: publisher_id
+    type: string
+  - name: requests_no_response
+    type: long
+  - name: responses_no_impression
+    type: long
+  - name: impressions_no_click
+    type: long
+  - name: response_leakage_rate
+    type: double
+  - name: impression_leakage_rate
+    type: double
+  - name: click_leakage_rate
+    type: double
+partition_spec:
+  - transform: day
+    source: window_start
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - window_start
+  - publisher_id

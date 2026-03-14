@@ -22,7 +22,7 @@ BEGIN
 -- Uses FLOOR(TO HOUR) instead of TUMBLE because time attributes lose their
 -- watermark property after interval joins, preventing TUMBLE from firing.
 -- The upsert sink continuously updates funnel metrics per (hour, publisher) key.
-INSERT INTO iceberg_hourly_funnel_by_publisher
+INSERT INTO iceberg_catalog.db.hourly_funnel_by_publisher
 SELECT
     FLOOR(br.`event_ts` TO HOUR) AS window_start,
     COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`) AS publisher_id,
@@ -63,7 +63,7 @@ GROUP BY
     COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`);
 
 -- Hourly leakage metrics by publisher.
-INSERT INTO iceberg_funnel_leakage_hourly
+INSERT INTO iceberg_catalog.db.funnel_leakage_hourly
 SELECT
     FLOOR(br.`event_ts` TO HOUR) AS window_start,
     COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`) AS publisher_id,

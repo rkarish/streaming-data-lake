@@ -1,0 +1,21 @@
+namespace: db
+table: dq_rejected_events
+format_version: 2
+schema:
+  - name: request_id
+    type: string
+  - name: imp_id
+    type: string
+  - name: publisher_id
+    type: string
+  - name: device_ip
+    type: string
+  - name: reject_reason
+    type: string
+  - name: event_timestamp
+    type: timestamptz
+partition_spec:
+  - transform: day
+    source: event_timestamp
+properties: {}
+identifier_fields: []

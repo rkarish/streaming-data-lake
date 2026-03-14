@@ -18,7 +18,7 @@ BEGIN
 -- Uses FLOOR(TO HOUR) instead of TUMBLE because time attributes lose their
 -- watermark property after an interval join, preventing TUMBLE from firing.
 -- The upsert sink continuously updates aggregates per (hour, country) key.
-INSERT INTO iceberg_hourly_impressions_by_geo
+INSERT INTO iceberg_catalog.db.hourly_impressions_by_geo
 SELECT
     FLOOR(imp.`event_ts` TO HOUR) AS window_start,
     br.`device_geo_country` AS device_geo_country,
@@ -54,7 +54,7 @@ GROUP BY
 -- Rolling 5-minute metrics by bidder: sliding window (1-min hop, 5-min size)
 -- Provides near-real-time metrics for dashboards, updated every minute
 -- Uses explicit Flink sink table with upsert-enabled for proper Iceberg writes
-INSERT INTO iceberg_rolling_metrics_by_bidder
+INSERT INTO iceberg_catalog.db.rolling_metrics_by_bidder
 SELECT
     HOP_START(`event_ts`, INTERVAL '1' MINUTE, INTERVAL '5' MINUTES) AS window_start,
     HOP_END(`event_ts`, INTERVAL '1' MINUTE, INTERVAL '5' MINUTES) AS window_end,
@@ -78,7 +78,7 @@ GROUP BY
     `bidder_id`;
 
 -- Hourly data quality metrics with duplicate breakdown by event type.
-INSERT INTO iceberg_dq_event_quality_hourly
+INSERT INTO iceberg_catalog.db.dq_event_quality_hourly
 SELECT
     w.window_start,
     COALESCE(req.total_bid_requests, 0) AS total_bid_requests,
@@ -226,7 +226,7 @@ LEFT JOIN (
 
 -- Hourly auction landscape metrics by publisher.
 -- Uses full seatbid[].bid[] expansion to preserve bid cardinality.
-INSERT INTO iceberg_bid_landscape_hourly
+INSERT INTO iceberg_catalog.db.bid_landscape_hourly
 SELECT
     FLOOR(resp.`event_ts` TO HOUR) AS window_start,
     COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`, 'unknown') AS publisher_id,
@@ -267,7 +267,7 @@ GROUP BY
     COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`, 'unknown');
 
 -- One-minute serving metrics for low-latency monitoring.
-INSERT INTO iceberg_realtime_serving_metrics_1m
+INSERT INTO iceberg_catalog.db.realtime_serving_metrics_1m
 SELECT
     FLOOR(imp.`event_ts` TO MINUTE) AS window_start,
     imp.`bidder_id`,

@@ -1,0 +1,24 @@
+namespace: db
+table: realtime_serving_metrics_1m
+format_version: 2
+schema:
+  - name: window_start
+    type: timestamp
+  - name: bidder_id
+    type: string
+  - name: impressions
+    type: long
+  - name: clicks
+    type: long
+  - name: revenue
+    type: double
+  - name: ctr
+    type: double
+partition_spec:
+  - transform: day
+    source: window_start
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - window_start
+  - bidder_id

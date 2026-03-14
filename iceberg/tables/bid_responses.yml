@@ -1,0 +1,31 @@
+namespace: db
+table: bid_responses
+format_version: 2
+schema:
+  - name: response_id
+    type: string
+  - name: request_id
+    type: string
+  - name: seat
+    type: string
+  - name: bid_id
+    type: string
+  - name: imp_id
+    type: string
+  - name: bid_price
+    type: double
+  - name: creative_id
+    type: string
+  - name: deal_id
+    type: string
+  - name: ad_domain
+    type: string
+  - name: currency
+    type: string
+  - name: event_timestamp
+    type: timestamptz
+partition_spec:
+  - transform: day
+    source: event_timestamp
+properties: {}
+identifier_fields: []

@@ -1,0 +1,55 @@
+namespace: db
+table: dq_event_quality_hourly
+format_version: 2
+schema:
+  - name: window_start
+    type: timestamp
+  - name: total_bid_requests
+    type: long
+  - name: unique_bid_requests
+    type: long
+  - name: duplicate_bid_requests
+    type: long
+  - name: duplicate_bid_request_rate
+    type: double
+  - name: total_bid_responses
+    type: long
+  - name: unique_bid_responses
+    type: long
+  - name: duplicate_bid_responses
+    type: long
+  - name: duplicate_bid_response_rate
+    type: double
+  - name: total_wins
+    type: long
+  - name: unique_wins
+    type: long
+  - name: duplicate_wins
+    type: long
+  - name: duplicate_win_rate
+    type: double
+  - name: total_clicks
+    type: long
+  - name: unique_clicks
+    type: long
+  - name: duplicate_clicks
+    type: long
+  - name: duplicate_click_rate
+    type: double
+  - name: invalid_bid_requests
+    type: long
+  - name: invalid_bid_request_rate
+    type: double
+  - name: total_events_all
+    type: long
+  - name: duplicate_events_all
+    type: long
+  - name: duplicate_rate_all
+    type: double
+partition_spec:
+  - transform: day
+    source: window_start
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - window_start

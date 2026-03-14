@@ -1,0 +1,26 @@
+namespace: db
+table: bid_landscape_hourly
+format_version: 2
+schema:
+  - name: window_start
+    type: timestamp
+  - name: publisher_id
+    type: string
+  - name: request_count
+    type: long
+  - name: total_bids
+    type: long
+  - name: bids_per_request
+    type: double
+  - name: avg_bid_price
+    type: double
+  - name: max_bid_price
+    type: double
+partition_spec:
+  - transform: day
+    source: window_start
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - window_start
+  - publisher_id
