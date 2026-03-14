@@ -1823,7 +1823,7 @@ identifier_fields:
 
 - **Tables exist before Flink starts**: Unlike the failed Flink DDL approach, tables are pre-created by PyIceberg during setup. Trino sees all tables immediately after the script runs.
 - **Host-side dependency**: PyIceberg must be installed in the project `.venv/`. This is acceptable for a local dev platform but would need containerization for CI/CD.
-- **Schema evolution**: The script is idempotent — existing tables are skipped with a schema drift warning. Altering live tables still requires manual `ALTER TABLE` or recreation.
+- **Schema evolution**: The script is idempotent — existing tables are skipped with detailed drift detection (column types, requiredness, identifier fields, and partition spec). Altering live tables still requires manual `ALTER TABLE` or recreation.
 - **Reviewable changes**: Adding a column or changing a partition spec is a one-line YAML edit visible in a PR diff.
 
 ### Forward-Looking

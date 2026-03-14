@@ -112,7 +112,7 @@ docker compose ps
 
 ### 2. Run the setup script
 
-Waits for Schema Registry, configures BACKWARD compatibility, creates Kafka topics, MinIO bucket, deploys Flink on Kubernetes (which creates Iceberg namespace + tables via SQL DDL), and verifies Trino connectivity:
+Waits for Schema Registry, configures BACKWARD compatibility, creates Kafka topics, MinIO bucket, creates Iceberg namespace + tables via PyIceberg (from `iceberg/tables/*.yml`), deploys Flink on Kubernetes, and verifies Trino connectivity:
 
 ```bash
 bash scripts/setup.sh
@@ -330,7 +330,7 @@ docker compose ps
 
 ### 2. Run the setup script
 
-Creates Kafka topics, MinIO bucket, deploys Flink (which creates Iceberg namespace + tables via SQL DDL), and verifies Trino connectivity:
+Creates Kafka topics, MinIO bucket, creates Iceberg namespace + tables via PyIceberg (from `iceberg/tables/*.yml`), deploys Flink, and verifies Trino connectivity:
 
 ```bash
 bash scripts/setup.sh

@@ -100,7 +100,13 @@ while [ $attempt -lt $max_attempts ]; do
 done
 
 echo "==> Creating Iceberg tables from YAML definitions..."
-"$SCRIPT_DIR/../.venv/bin/python" "$SCRIPT_DIR/../iceberg/apply_tables.py"
+VENV_PYTHON="$SCRIPT_DIR/../.venv/bin/python"
+if [ ! -x "$VENV_PYTHON" ]; then
+  echo "    Virtual environment not found. Creating .venv and installing dependencies..."
+  python3 -m venv "$SCRIPT_DIR/../.venv"
+  "$VENV_PYTHON" -m pip install --quiet -r "$SCRIPT_DIR/../iceberg/requirements.txt"
+fi
+"$VENV_PYTHON" "$SCRIPT_DIR/../iceberg/apply_tables.py"
 
 # -----------------------------------------------------------------------------
 # Task 4: Deploy Flink streaming jobs on Kubernetes

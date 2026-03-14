@@ -136,6 +136,88 @@ def build_partition_spec(schema, definition):
     return PartitionSpec(*part_fields)
 
 
+def _field_type_name(field_type):
+    """Return a comparable string for an Iceberg field type."""
+    if isinstance(field_type, ListType):
+        return f"list<{_field_type_name(field_type.element_type)}>"
+    return type(field_type).__name__
+
+
+def check_drift(existing_table, defn):
+    """Compare an existing Iceberg table against a YAML definition.
+
+    Returns a list of drift warning strings, or an empty list if no drift.
+    """
+    warnings = []
+
+    # -- Column drift (added/removed, type changes, requiredness changes) --
+    existing_fields = {f.name: f for f in existing_table.schema().fields}
+    yaml_cols = {c["name"] for c in defn["schema"]}
+    existing_cols = set(existing_fields.keys())
+
+    added = yaml_cols - existing_cols
+    removed = existing_cols - yaml_cols
+    if added:
+        warnings.append(f"columns added in YAML: {sorted(added)}")
+    if removed:
+        warnings.append(f"columns removed from YAML: {sorted(removed)}")
+
+    id_field_names = set(defn.get("identifier_fields", []))
+    # Reserve element IDs consistent with build_schema
+    next_element_id = len(defn["schema"]) + 1
+    for col in defn["schema"]:
+        if col["name"] not in existing_fields:
+            continue
+        ef = existing_fields[col["name"]]
+        yaml_type, next_element_id = parse_type(col["type"], next_element_id)
+        if _field_type_name(ef.field_type) != _field_type_name(yaml_type):
+            warnings.append(
+                f"column '{col['name']}' type: "
+                f"catalog={_field_type_name(ef.field_type)}, "
+                f"yaml={_field_type_name(yaml_type)}"
+            )
+        yaml_required = col["name"] in id_field_names
+        if ef.required != yaml_required:
+            warnings.append(
+                f"column '{col['name']}' required: "
+                f"catalog={ef.required}, yaml={yaml_required}"
+            )
+
+    # -- Identifier field drift --
+    existing_id_ids = set(existing_table.schema().identifier_field_ids)
+    existing_id_names = {
+        f.name for f in existing_table.schema().fields
+        if f.field_id in existing_id_ids
+    }
+    yaml_id_names = set(defn.get("identifier_fields", []))
+    if existing_id_names != yaml_id_names:
+        warnings.append(
+            f"identifier_fields: catalog={sorted(existing_id_names)}, "
+            f"yaml={sorted(yaml_id_names)}"
+        )
+
+    # -- Partition spec drift --
+    existing_parts = [
+        (pf.name, type(pf.transform).__name__)
+        for pf in existing_table.spec().fields
+    ]
+    yaml_parts = []
+    if defn.get("partition_spec"):
+        for spec in defn["partition_spec"]:
+            t = spec["transform"]
+            s = spec["source"]
+            name = s if t == "identity" else f"{s}_{t}"
+            yaml_parts.append((name, TRANSFORMS[t].__name__))
+    if existing_parts != yaml_parts:
+        fmt = lambda ps: [(n, t) for n, t in ps]
+        warnings.append(
+            f"partition_spec: catalog={fmt(existing_parts)}, "
+            f"yaml={fmt(yaml_parts)}"
+        )
+
+    return warnings
+
+
 def main():
     catalog_config = {
         "type": "rest",
@@ -177,19 +259,13 @@ def main():
 
         try:
             existing = catalog.load_table(identifier)
-            existing_cols = {f.name for f in existing.schema().fields}
-            yaml_cols = {c["name"] for c in defn["schema"]}
-            if existing_cols != yaml_cols:
-                added = yaml_cols - existing_cols
-                removed = existing_cols - yaml_cols
-                parts = []
-                if added:
-                    parts.append(f"added={added}")
-                if removed:
-                    parts.append(f"removed={removed}")
-                print(f"    WARN  {ns}.{table_name} exists but schema differs ({', '.join(parts)})")
+            drift = check_drift(existing, defn)
+            if drift:
+                for msg in drift:
+                    print(f"    WARN  {ns}.{table_name}: {msg}")
             else:
-                print(f"    OK    {ns}.{table_name} (exists, {len(existing_cols)} columns)")
+                col_count = len(existing.schema().fields)
+                print(f"    OK    {ns}.{table_name} (exists, {col_count} columns)")
             continue
         except NoSuchTableError:
             pass
