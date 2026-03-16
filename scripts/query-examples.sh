@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# AdTech Data Lake Streaming Platform - Sample Analytical Queries
+# AdTech Data Playground - Sample Analytical Queries
 # =============================================================================
 # Runs example queries against the Iceberg tables via Trino.
 # Includes single-table analytics and full-funnel join queries.

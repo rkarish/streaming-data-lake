@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set up Superset resources for the AdTech Data Lake Streaming Platform.
+"""Set up Superset resources for the AdTech Data Playground.
 
 Creates:
 - Trino database connection

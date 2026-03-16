@@ -1,4 +1,4 @@
-# AdTech Data Lake Streaming Platform - Design Document
+# AdTech Data Playground - Design Document
 
 ## 1. Overview
 

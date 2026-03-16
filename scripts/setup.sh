@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# AdTech Data Lake Streaming Platform - Setup
+# AdTech Data Playground - Setup
 # =============================================================================
 # Run this script AFTER `docker compose up -d` to initialize:
 #   1. Kafka topics (bid-requests, bid-responses, impressions, clicks)

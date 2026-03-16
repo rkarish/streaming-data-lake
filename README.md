@@ -1,8 +1,8 @@
-# AdTech Data Lake Streaming Platform
+# AdTech Data Playground
 
-A data lake streaming platform for adtech that produces a full OpenRTB 2.6 event funnel (bid requests, bid responses, impressions, clicks) as Avro-serialized messages to Apache Kafka (with Confluent Schema Registry for schema governance and evolution), streams them through Apache Flink, and stores them in Apache Iceberg tables backed by MinIO (S3-compatible) object storage. Includes Trino as the SQL query engine, CloudBeaver as a web-based SQL IDE, and Apache Superset for dashboards and visualization.
+An end-to-end adtech data playground that produces a full OpenRTB 2.6 event funnel (bid requests, bid responses, impressions, clicks) as Avro-serialized messages to Apache Kafka (with Confluent Schema Registry for schema governance and evolution), streams them through Apache Flink, and stores them in Apache Iceberg tables backed by MinIO (S3-compatible) object storage. Includes Trino as the SQL query engine, CloudBeaver as a web-based SQL IDE, and Apache Superset for dashboards and visualization.
 
-See [`.design/adtech-data-lake-streaming-platform.md`](.design/adtech-data-lake-streaming-platform.md) for the full design document.
+See [`.design/adtech-data-playground.md`](.design/adtech-data-playground.md) for the full design document.
 
 ## Architecture
 
@@ -82,7 +82,6 @@ Mock Data Gen  --->  Kafka (KRaft)         ┌─ Docker Compose ───┐
 - Python 3.12+ (for local development only)
   - On Ubuntu/Debian, also install `python3-venv`: `sudo apt install python3-venv`
 - `curl` (for setup script)
-- [Claude Code](https://claude.com/claude-code) with the `voltagent-data-ai` subagent (for AI-assisted development)
 
 ## Quick Start (Docker)
 

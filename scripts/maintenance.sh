@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# AdTech Data Lake Streaming Platform - Table Maintenance
+# AdTech Data Playground - Table Maintenance
 # =============================================================================
 # Runs Iceberg table maintenance operations via Trino:
 #   1. Compaction (optimize small files)

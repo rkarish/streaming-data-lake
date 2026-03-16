@@ -4,7 +4,7 @@
 
 All design documents are located in the `.design/` directory. Review these before making architectural decisions or implementing new features.
 
-- [AdTech Data Lake Streaming Platform](.design/adtech-data-lake-streaming-platform.md)
+- [AdTech Data Playground](.design/adtech-data-playground.md)
 
 ## Coding Standards
 
