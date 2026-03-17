@@ -3,8 +3,8 @@
 # redeploy-sql.sh — Hot-redeploy Flink SQL jobs without rebuilding the image
 #
 # Session mode only. Cancels the running Flink job for the specified group,
-# then streams updated SQL from your local workspace into a temporary
-# kubectl-run sql-client pod attached to the session cluster to resubmit them.
+# then submits updated SQL from your local workspace via a temporary pod
+# connected to the session cluster's REST endpoint.
 #
 # Usage: redeploy-sql.sh <ingestion|aggregation|funnel|all>
 # =============================================================================
@@ -23,8 +23,7 @@ case "$JOB" in
 Usage: redeploy-sql.sh <ingestion|aggregation|funnel|all>
 
 Hot-redeploy Flink SQL jobs in session mode without rebuilding the image.
-Cancels the running job, then streams updated local SQL into a temporary
-sql-client pod (via kubectl run) connected to the session cluster to resubmit.
+Cancels the running job and resubmits updated SQL via a temporary pod.
 
 Jobs:
   ingestion   — Raw Kafka-to-Iceberg inserts  (insert_jobs.sql)
@@ -97,7 +96,7 @@ cancel_job() {
 
   if [[ -n "$job_id" ]]; then
     if kubectl -n "$NAMESPACE" exec "$SESSION_POD" -- \
-      wget -qO /dev/null --method=PATCH "http://localhost:8081/jobs/$job_id" 2>/dev/null; then
+      wget -qO /dev/null --method=PATCH "http://localhost:8081/jobs/$job_id?mode=cancel" 2>/dev/null; then
       echo "    Cancelled $job_id"
     else
       echo "    WARNING: Failed to cancel job $job_id"

@@ -77,7 +77,7 @@ docker rm "$CONTAINER_ID" >/dev/null
 # Docker Desktop's Kind-based K8s backend runs the node as a Docker container
 # with its own containerd. Images must be explicitly imported into it.
 # The older Kubeadm backend shared the Docker daemon, so this isn't needed there.
-if docker inspect desktop-control-plane &>/dev/null; then
+if docker ps --filter name=desktop-control-plane --filter status=running --format '{{.Names}}' | grep -q desktop-control-plane; then
   echo "  Loading image into Kubernetes node's containerd..."
   docker save adtech-flink:latest | docker exec -i desktop-control-plane ctr --namespace k8s.io images import -
 fi
