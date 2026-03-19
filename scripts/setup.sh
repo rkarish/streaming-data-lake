@@ -153,6 +153,9 @@ while [ $attempt -lt $max_attempts ]; do
   sleep 5
 done
 
+echo "==> Creating Trino views..."
+bash "$SCRIPT_DIR/../trino/apply_views.sh"
+
 # -----------------------------------------------------------------------------
 # Task 6: Wait for CloudBeaver
 # -----------------------------------------------------------------------------
