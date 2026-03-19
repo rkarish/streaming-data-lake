@@ -155,6 +155,90 @@
             "problemMatcher": []
         },
         {
+            "label": "redeploy-sql: ingestion (application-mode)",
+            "type": "shell",
+            "command": "bash scripts/redeploy-sql-application.sh ingestion",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "redeploy-sql: aggregation (application-mode)",
+            "type": "shell",
+            "command": "bash scripts/redeploy-sql-application.sh aggregation",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "redeploy-sql: funnel (application-mode)",
+            "type": "shell",
+            "command": "bash scripts/redeploy-sql-application.sh funnel",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "redeploy-sql: all (application-mode)",
+            "type": "shell",
+            "command": "bash scripts/redeploy-sql-application.sh all",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "clear-data (application-mode)",
+            "type": "shell",
+            "command": "bash scripts/clear-data.sh application",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "clear-data (session-mode)",
+            "type": "shell",
+            "command": "bash scripts/clear-data.sh session",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "teardown-flink-k8s",
             "type": "shell",
             "command": "bash k8s/scripts/teardown-k8s.sh",
@@ -324,6 +408,36 @@
             "presentation": {
                 "reveal": "always",
                 "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "port-forward (application-mode)",
+            "type": "shell",
+            "command": "pkill -f 'kubectl port-forward.*-n flink' 2>/dev/null || true; kubectl port-forward svc/flink-ingestion-rest -n flink 8081:8081 &>/dev/null & kubectl port-forward svc/flink-aggregation-rest -n flink 8082:8081 &>/dev/null & kubectl port-forward svc/flink-funnel-rest -n flink 8083:8081 &>/dev/null & echo 'Port-forwards running:' && echo '    - Flink Ingestion:   http://localhost:8081' && echo '    - Flink Aggregation: http://localhost:8082' && echo '    - Flink Funnel:      http://localhost:8083' && echo '' && echo 'Press Ctrl+C to stop.' && wait",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "isBackground": true,
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "port-forward (session-mode)",
+            "type": "shell",
+            "command": "pkill -f 'kubectl port-forward.*-n flink' 2>/dev/null || true; kubectl port-forward svc/flink-session-rest -n flink 8081:8081 &>/dev/null & echo 'Port-forwards running:' && echo '    - Flink Session: http://localhost:8081' && echo '' && echo 'Press Ctrl+C to stop.' && wait",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "isBackground": true,
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
             },
             "problemMatcher": []
         },

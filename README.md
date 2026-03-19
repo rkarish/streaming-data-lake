@@ -421,8 +421,16 @@ Run any task via **Terminal > Run Task...** (or `Cmd+Shift+P` > "Tasks: Run Task
 
 | Task | Description |
 |---|---|
-| `deploy-flink-k8s (application-mode)` | Deploy Flink as 3 independent clusters on Kubernetes |
-| `deploy-flink-k8s (session-mode)` | Deploy Flink as 1 session cluster with 3 jobs on Kubernetes |
+| `redeploy-sql: ingestion (session-mode)` | Hot-redeploy ingestion SQL without image rebuild (session mode) |
+| `redeploy-sql: aggregation (session-mode)` | Hot-redeploy aggregation SQL without image rebuild (session mode) |
+| `redeploy-sql: funnel (session-mode)` | Hot-redeploy funnel SQL without image rebuild (session mode) |
+| `redeploy-sql: all (session-mode)` | Hot-redeploy all SQL jobs without image rebuild (session mode) |
+| `redeploy-sql: ingestion (application-mode)` | Rebuild image and restart ingestion FlinkDeployment |
+| `redeploy-sql: aggregation (application-mode)` | Rebuild image and restart aggregation FlinkDeployment |
+| `redeploy-sql: funnel (application-mode)` | Rebuild image and restart funnel FlinkDeployment |
+| `redeploy-sql: all (application-mode)` | Rebuild image and restart all FlinkDeployments |
+| `clear-data (application-mode)` | Purge Kafka, wipe Iceberg/MinIO, restart Flink jobs (application mode) |
+| `clear-data (session-mode)` | Purge Kafka, wipe Iceberg/MinIO, restart Flink jobs (session mode) |
 | `teardown-flink-k8s` | Tear down Flink Kubernetes resources |
 | `run-table-maintenance` | Run Iceberg table maintenance (compaction, snapshot expiry, orphan cleanup) |
 | `run-query-examples` | Run sample analytical queries via Trino |
@@ -682,4 +690,7 @@ streaming-data-lake/
     setup-generator-local-debug.sh # Set up local .venv for debugging the generator
     query-examples.sh              # Sample analytical queries via Trino
     maintenance.sh                 # Iceberg table maintenance for all core/enriched/quality/aggregate tables
+    redeploy-sql.sh                # Hot-redeploy Flink SQL jobs (session mode only)
+    redeploy-sql-application.sh    # Rebuild image and restart FlinkDeployments (application mode)
+    clear-data.sh                  # Purge Kafka/Iceberg/MinIO and restart Flink jobs from scratch
 ```
