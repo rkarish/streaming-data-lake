@@ -61,9 +61,12 @@ else
     JOB_IDS=$(kubectl -n "$NAMESPACE" exec "$SESSION_POD" -- \
       /opt/flink/bin/flink list -r 2>/dev/null | grep -oE '[a-f0-9]{32}') || true
     for jid in $JOB_IDS; do
-      kubectl -n "$NAMESPACE" exec "$SESSION_POD" -- \
-        wget -qO /dev/null --method=PATCH "http://localhost:8081/jobs/$jid?mode=cancel" 2>/dev/null || true
-      echo "    Cancelled job $jid"
+      if kubectl -n "$NAMESPACE" exec "$SESSION_POD" -- \
+        wget -qO /dev/null --method=PATCH "http://localhost:8081/jobs/$jid?mode=cancel" 2>/dev/null; then
+        echo "    Cancelled job $jid"
+      else
+        echo "    WARNING: Failed to cancel job $jid"
+      fi
     done
   else
     echo "    No running session cluster found — skipping job cancellation."
@@ -148,9 +151,27 @@ if [[ "$FLINK_MODE" == "application" ]]; then
   kubectl wait --for=condition=Ready pod -l app=flink-ingestion -n "$NAMESPACE" --timeout=180s 2>/dev/null || true
   kubectl wait --for=condition=Ready pod -l app=flink-aggregation -n "$NAMESPACE" --timeout=180s 2>/dev/null || true
   kubectl wait --for=condition=Ready pod -l app=flink-funnel -n "$NAMESPACE" --timeout=180s 2>/dev/null || true
+
+  echo "    Restarting port-forwards..."
+  for name in ingestion aggregation funnel; do
+    pkill -f "kubectl port-forward svc/flink-${name}-rest" 2>/dev/null || true
+  done
+  kubectl port-forward svc/flink-ingestion-rest -n "$NAMESPACE" 8081:8081 &>/dev/null &
+  kubectl port-forward svc/flink-aggregation-rest -n "$NAMESPACE" 8082:8081 &>/dev/null &
+  kubectl port-forward svc/flink-funnel-rest -n "$NAMESPACE" 8083:8081 &>/dev/null &
 else
   bash "$SCRIPT_DIR/redeploy-sql.sh" all
 fi
 
 echo ""
 echo "==> Data cleared and Flink jobs restarted ($FLINK_MODE mode)."
+if [[ "$FLINK_MODE" == "application" ]]; then
+  echo ""
+  echo "Port-forwards running in background:"
+  echo "    - Flink Ingestion:   http://localhost:8081"
+  echo "    - Flink Aggregation: http://localhost:8082"
+  echo "    - Flink Funnel:      http://localhost:8083"
+  echo ""
+  echo "Press Ctrl+C to stop port-forwards."
+  wait
+fi

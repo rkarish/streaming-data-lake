@@ -3,6 +3,9 @@
 -- full-funnel conversion metrics per publisher per hour.
 -- Run as a separate Flink job for independent lifecycle and checkpointing.
 
+-- Pipeline name for deterministic job identification (used by redeploy-sql.sh)
+SET 'pipeline.name' = 'adtech-funnel';
+
 -- Checkpoint configuration for funnel jobs (separate checkpoint directory)
 SET 'execution.checkpointing.interval' = '60s';
 SET 'execution.checkpointing.mode' = 'EXACTLY_ONCE';

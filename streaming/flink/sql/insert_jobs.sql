@@ -1,5 +1,8 @@
 -- Flink SQL DML: Streaming inserts from Kafka into Iceberg
 
+-- Pipeline name for deterministic job identification (used by redeploy-sql.sh)
+SET 'pipeline.name' = 'adtech-ingestion';
+
 -- Checkpoint configuration
 SET 'execution.checkpointing.interval' = '60s';
 SET 'execution.checkpointing.mode' = 'EXACTLY_ONCE';

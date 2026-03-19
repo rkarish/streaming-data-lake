@@ -67,13 +67,13 @@ get_dml_file() {
   esac
 }
 
-# Unique table name present in each Flink job's name, used to match against
-# `flink list -r` output for targeted cancellation.
+# Pipeline name set in each SQL file via `SET 'pipeline.name'`, used to match
+# against `flink list -r` output for targeted cancellation.
 get_marker() {
   case "$1" in
-    ingestion)   echo "bid_requests_enriched" ;;
-    aggregation) echo "hourly_impressions_by_geo" ;;
-    funnel)      echo "hourly_funnel_by_publisher" ;;
+    ingestion)   echo "adtech-ingestion" ;;
+    aggregation) echo "adtech-aggregation" ;;
+    funnel)      echo "adtech-funnel" ;;
   esac
 }
 

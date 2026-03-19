@@ -2,6 +2,9 @@
 -- These jobs use windowing and write to upsert-enabled tables with primary keys
 -- Run as a separate Flink job from the main insert_jobs.sql for independent lifecycle
 
+-- Pipeline name for deterministic job identification (used by redeploy-sql.sh)
+SET 'pipeline.name' = 'adtech-aggregation';
+
 -- Checkpoint configuration for aggregation jobs (separate checkpoint directory)
 SET 'execution.checkpointing.interval' = '60s';
 SET 'execution.checkpointing.mode' = 'EXACTLY_ONCE';
