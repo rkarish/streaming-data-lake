@@ -293,52 +293,19 @@ parsed.writeStream \
 | Cloud managed options | Amazon Managed Flink, GKE | EMR, Dataproc | MSK Connect |
 | Best for | Low-latency event streaming | Mixed batch+streaming | Simple pipe, no transforms |
 
-## 5. Architecture (Local Docker Compose)
+## 5. Architecture
 
-```
-                    +-----------------+
-                    | Mock Data Gen   |
-                    | (OpenRTB 2.6)   |
-                    +--------+--------+
-                             |
-                             v
-                   +-------------------+
-                   | Schema Registry   |
-                   | (Avro schemas)    |
-                   +-------------------+
-                             |
-                             v
-                    +-----------------+
-                    |   Apache Kafka  |
-                    |   (KRaft mode)  |
-                    +--------+--------+
-                             |
-                             v
-              +-----------------------------+
-              |    Streaming Engine          |
-              |      (Apache Flink)         |
-              +-------------+---------------+
-                            |
-                +-----------+-----------+
-                |                       |
-                v                       v
-        +---------------+     +------------------+
-        | Iceberg REST  |     | MinIO            |
-        | Catalog       |     | (S3-compatible)  |
-        +---------------+     +------------------+
-                                        |
-                                        v
-                              +------------------+
-                              | Iceberg Tables   |
-                              | (Parquet files)  |
-                              +------------------+
-                                        |
-                                        v
-                              +------------------+
-                              | Query Engine     |
-                              | (Trino / Spark)  |
-                              +------------------+
-```
+### Application Mode
+
+Each Flink job runs as an independent cluster with its own JobManager and scalable TaskManager pods.
+
+![Application Mode Architecture](../diagrams/adtech_architecture_application.png)
+
+### Session Mode
+
+All Flink jobs share a single session cluster. Kubernetes Jobs submit SQL via `sql-client.sh`.
+
+![Session Mode Architecture](../diagrams/adtech_architecture_session.png)
 
 ### 5.1 Docker Compose Services
 

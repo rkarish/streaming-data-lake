@@ -6,44 +6,17 @@ See [`.design/adtech-data-playground.md`](.design/adtech-data-playground.md) for
 
 ## Architecture
 
-```
-                    Schema Registry
-                     (Avro schemas)
-                         ^
-                         |
-Mock Data Gen  --->  Kafka (KRaft)         ┌─ Docker Compose ───┐
-   (Avro)                |                 │  (infrastructure)  │
-                         |                 └────────┬───────────┘
-                         v                          |
-    ┌─ Kubernetes (Docker Desktop) ──────┐          |
-    |                                    | host.docker.internal
-    |  ┌────────────┐  ┌─────────────┐   |          |
-    |  | Ingestion  |  | Aggregation |   |<---------+
-    |  | Cluster    |  | Cluster     |   |
-    |  └────────────┘  └─────────────┘   |
-    |  ┌────────────┐  ┌─────────────┐   |
-    |  | Funnel     |  | Flink       |   |
-    |  | Cluster    |  | Operator    |   |
-    |  └────────────┘  └─────────────┘   |
-    |  Argo CD (GitOps)                  |
-    └────────────────────────────────────┘
-                         |
-              +----------+----------+
-              |                     |
-        Iceberg REST            MinIO (S3)
-         Catalog                    |
-              |              Iceberg Tables
-              |             (Parquet files)
-              |                     |
-              +----------+----------+
-                         |
-                   Trino (Query)
-                         |
-              +----------+----------+
-              |                     |
-        CloudBeaver           Superset
-       (Web SQL IDE)         (Dashboards)
-```
+### Application Mode
+
+Each Flink job runs as an independent cluster with its own JobManager and scalable TaskManager pods.
+
+![Application Mode Architecture](diagrams/adtech_architecture_application.png)
+
+### Session Mode
+
+All Flink jobs share a single session cluster. Kubernetes Jobs submit SQL via `sql-client.sh`.
+
+![Session Mode Architecture](diagrams/adtech_architecture_session.png)
 
 **Services:**
 
