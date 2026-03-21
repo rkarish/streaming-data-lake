@@ -210,11 +210,12 @@ for entry in "${MATERIALIZATIONS[@]}"; do
       # Re-insert affected rows from the view (with fresh dimension values)
       ${TRINO} --execute "
         INSERT INTO iceberg.db.${mat_table}
-        SELECT v.* FROM iceberg.db.${view_name} v
-        INNER JOIN iceberg.db.${dim_table} d
-          ON v.${fk_col} = d.${dim_pk}
-          AND d.valid_from > TIMESTAMP '${watermark}'
-        WHERE v.${view_ts_col} <= TIMESTAMP '${watermark}'
+        SELECT * FROM iceberg.db.${view_name}
+        WHERE ${fk_col} IN (
+          SELECT ${dim_pk} FROM iceberg.db.${dim_table}
+          WHERE valid_from > TIMESTAMP '${watermark}'
+        )
+        AND ${view_ts_col} <= TIMESTAMP '${watermark}'
           ${dim_repair_upper}
       " 2>/dev/null
 
