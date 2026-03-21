@@ -1799,7 +1799,7 @@ identifier_fields:
 
 The streaming pipeline currently stores only denormalized fact data. In real adtech, DSPs (bidders) pass IDs in bid responses and the SSP/exchange resolves them against dimension tables for reporting. This phase adds SCD Type 2 dimension tables to the Iceberg database, seeds them with static mock data, and updates bid response events to carry DSP hierarchy IDs.
 
-Reporting queries/views that join facts with dimensions are out of scope for this phase — they will be a separate follow-up effort.
+This phase also adds Trino views that join facts with dimensions, a materialization workflow for pre-computed tables, and supporting maintenance scripts.
 
 #### 12.2 DSP Hierarchy (Buy-Side)
 
@@ -1826,7 +1826,7 @@ Each level carries its parent FK so joins can walk up the hierarchy. The `dim_cr
 | Table | PK | ~Rows | Key Columns |
 |---|---|---|---|
 | `dim_publisher` | `publisher_id` | 30 | publisher_name, domain, vertical, tier |
-| `dim_deal` | `deal_id` | 20 | deal_name, deal_type, floor_price, buyer_seat, seller_id |
+| `dim_deal` | `deal_id` | 19 | deal_name, deal_type, floor_price, buyer_seat, seller_id |
 | `dim_geo` | `geo_key` | 24 | country_code, country_name, region_code, region_name, timezone |
 | `dim_device_type` | `device_type_code` | 4 | device_type_name, form_factor, is_mobile |
 | `dim_device_os` | `os_name` | 4 | os_vendor, os_family |
@@ -1863,7 +1863,7 @@ table: dim_agency
 format_version: 2
 schema:
   - name: agency_id
-    type: string
+    type: int
   - name: valid_from
     type: timestamptz
   - name: agency_name
@@ -1889,20 +1889,20 @@ identifier_fields:
 Add five nullable fields to the `Bid` record inside `bid_response.avsc`:
 
 ```json
-{"name": "campaign_id", "type": ["null", "string"], "default": null},
-{"name": "line_item_id", "type": ["null", "string"], "default": null},
-{"name": "strategy_id", "type": ["null", "string"], "default": null},
-{"name": "advertiser_id", "type": ["null", "string"], "default": null},
-{"name": "agency_id", "type": ["null", "string"], "default": null}
+{"name": "campaign_id", "type": ["null", "int"], "default": null},
+{"name": "line_item_id", "type": ["null", "int"], "default": null},
+{"name": "strategy_id", "type": ["null", "int"], "default": null},
+{"name": "advertiser_id", "type": ["null", "int"], "default": null},
+{"name": "agency_id", "type": ["null", "int"], "default": null}
 ```
 
-All five are nullable union types with `null` default to maintain backward compatibility with Schema Registry's BACKWARD compatibility mode. No changes needed to `bid_request.avsc`, `impression.avsc`, or `click.avsc` — the hierarchy is resolved by joining through `dim_creative → dim_strategy → ... → dim_agency` at query time.
+All five are nullable union types with `null` default. Additionally, `bid_request.avsc`, `impression.avsc`, and `click.avsc` have their ID fields updated from string to int to match the integer ID convention. Since the reference architecture always registers schemas fresh (no pre-existing subjects to evolve), this is safe despite not being Avro BACKWARD-compatible in the strict sense.
 
 #### 12.7 Dimension Seeding
 
 A new script `iceberg/seed_dimensions.py` generates and writes all dimension data directly to Iceberg via PyIceberg + PyArrow. This runs at setup time (after `apply_tables.py`, before Flink starts).
 
-The dimension hierarchy is built deterministically from a shared mapping module (`mock-data-gen/src/dimension_mapping.py`) so that both the seeder and the event generator agree on the ID-to-hierarchy mapping:
+The dimension hierarchy is built deterministically from a shared mapping module (`mock-data-gen/mock_data_gen/dimension_mapping.py`) so that both the seeder and the event generator agree on the ID-to-hierarchy mapping:
 
 ```
 5 agencies → 4 advertisers each (20) → 3 campaigns each (60)

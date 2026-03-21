@@ -18,6 +18,10 @@ Reference dimensions:
     4 device OS entries, 6 browsers
 """
 
+from datetime import date
+
+_CURRENT_YEAR = date.today().year
+
 # SCD Type 2 defaults applied to every dimension row
 SCD_VALID_FROM = "2020-01-01T00:00:00+00:00"
 SCD_VALID_TO = None
@@ -212,8 +216,8 @@ def build_dsp_hierarchy() -> dict:
                     "advertiser_id": adv_id,
                     "campaign_name": f"{INDUSTRIES[adv_idx]} {objective.title()} Q{(c % 4) + 1}",
                     "objective": objective,
-                    "start_date": f"2024-{start_month:02d}-01",
-                    "end_date": f"2024-{((start_month + 2) % 12) + 1:02d}-28",
+                    "start_date": f"{_CURRENT_YEAR}-{start_month:02d}-01",
+                    "end_date": f"{_CURRENT_YEAR + 1 if start_month >= 11 else _CURRENT_YEAR}-{((start_month + 2) % 12) + 1:02d}-28",
                     **_scd_fields(),
                 })
 

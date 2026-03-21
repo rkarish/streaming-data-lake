@@ -6,10 +6,16 @@ set -euo pipefail
 #
 # Creates physical Iceberg tables (mat_*) that mirror the Trino views (v_*),
 # pre-joining fact data with SCD Type 2 dimension attributes. Supports:
+#   - Late-arriving data repair within a lookback window (e.g. after backfill)
 #   - New fact data (appended since last run)
 #   - Dimension changes (re-materializes affected rows)
 #
 # First run does a full materialization. Subsequent runs are incremental.
+#
+# Environment variables:
+#   LOOKBACK_HOURS  Hours to look back for late-arriving data (default: 0 = disabled).
+#                   Set this after running a backfill to repair data that arrived
+#                   with event timestamps older than the current watermark.
 #
 # NOTE: This script is a temporary orchestration mechanism. The materialization
 # workflow will be moved to Apache Airflow for scheduled, observable execution.
@@ -18,6 +24,7 @@ set -euo pipefail
 # =============================================================================
 
 TRINO="docker exec trino trino --catalog iceberg --schema db"
+LOOKBACK_HOURS="${LOOKBACK_HOURS:-0}"
 
 # Run a Trino query and return the result (trimmed, no quotes)
 trino_query() {
@@ -46,6 +53,9 @@ MATERIALIZATIONS=(
 )
 
 echo "==> Incremental materialization of dimension-enriched views"
+if [ "$LOOKBACK_HOURS" -gt 0 ]; then
+  echo "    Lookback window: ${LOOKBACK_HOURS} hour(s)"
+fi
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -76,7 +86,8 @@ for entry in "${MATERIALIZATIONS[@]}"; do
         DELETE FROM iceberg.db.materialization_watermarks WHERE table_name = '${mat_table}'
       " 2>/dev/null || true
       ${TRINO} --execute "
-        INSERT INTO iceberg.db.materialization_watermarks VALUES ('${mat_table}', current_timestamp)
+        INSERT INTO iceberg.db.materialization_watermarks
+        VALUES ('${mat_table}', (SELECT MAX(${fact_ts_col}) FROM iceberg.db.${fact_table}))
       " 2>/dev/null
     else
       echo "    FAIL  Could not create ${mat_table}"
@@ -95,7 +106,8 @@ for entry in "${MATERIALIZATIONS[@]}"; do
       row_count=$(trino_query "SELECT count(*) FROM iceberg.db.${mat_table}")
       echo "    OK    Full load: ${row_count} rows"
       ${TRINO} --execute "
-        INSERT INTO iceberg.db.materialization_watermarks VALUES ('${mat_table}', current_timestamp)
+        INSERT INTO iceberg.db.materialization_watermarks
+        VALUES ('${mat_table}', (SELECT MAX(${fact_ts_col}) FROM iceberg.db.${fact_table}))
       " 2>/dev/null
     else
       echo "    FAIL  Full load failed"
@@ -105,6 +117,64 @@ for entry in "${MATERIALIZATIONS[@]}"; do
   fi
 
   echo "    Watermark: ${watermark}"
+
+  # --- Pass 0: Late-arrival repair (lookback window) ---
+  pass0_repaired=false
+  if [ "$LOOKBACK_HOURS" -gt 0 ]; then
+    lookback_start=$(trino_query "
+      SELECT CAST(TIMESTAMP '${watermark}' - INTERVAL '${LOOKBACK_HOURS}' HOUR AS VARCHAR)
+    ")
+
+    # Aggregate tables (window_start): always re-materialize the lookback window
+    # Raw fact tables: detect via count comparison, repair only if mismatch
+    needs_repair=false
+    if [ "$fact_ts_col" = "window_start" ]; then
+      mat_count=$(trino_query "
+        SELECT count(*) FROM iceberg.db.${mat_table}
+        WHERE ${view_ts_col} >= TIMESTAMP '${lookback_start}'
+          AND ${view_ts_col} <= TIMESTAMP '${watermark}'
+      ")
+      if [ "${mat_count:-0}" != "0" ]; then
+        needs_repair=true
+      fi
+    else
+      fact_count=$(trino_query "
+        SELECT count(*) FROM iceberg.db.${fact_table}
+        WHERE ${fact_ts_col} >= TIMESTAMP '${lookback_start}'
+          AND ${fact_ts_col} <= TIMESTAMP '${watermark}'
+      ")
+      mat_count=$(trino_query "
+        SELECT count(*) FROM iceberg.db.${mat_table}
+        WHERE ${view_ts_col} >= TIMESTAMP '${lookback_start}'
+          AND ${view_ts_col} <= TIMESTAMP '${watermark}'
+      ")
+      if [ "${fact_count:-0}" != "${mat_count:-0}" ]; then
+        needs_repair=true
+        echo "    Late arrivals detected in lookback window: ${fact_count} fact rows vs ${mat_count} mat rows"
+      fi
+    fi
+
+    if [ "$needs_repair" = true ]; then
+      ${TRINO} --execute "
+        DELETE FROM iceberg.db.${mat_table}
+        WHERE ${view_ts_col} >= TIMESTAMP '${lookback_start}'
+          AND ${view_ts_col} <= TIMESTAMP '${watermark}'
+      " 2>/dev/null
+      ${TRINO} --execute "
+        INSERT INTO iceberg.db.${mat_table}
+        SELECT * FROM iceberg.db.${view_name}
+        WHERE ${view_ts_col} >= TIMESTAMP '${lookback_start}'
+          AND ${view_ts_col} <= TIMESTAMP '${watermark}'
+      " 2>/dev/null
+      repaired_count=$(trino_query "
+        SELECT count(*) FROM iceberg.db.${mat_table}
+        WHERE ${view_ts_col} >= TIMESTAMP '${lookback_start}'
+          AND ${view_ts_col} <= TIMESTAMP '${watermark}'
+      ")
+      echo "    Repaired lookback window [${lookback_start} .. ${watermark}]: ${repaired_count} rows"
+      pass0_repaired=true
+    fi
+  fi
 
   # --- Pass 1: Handle dimension changes ---
   dim_changed_count=0
@@ -121,12 +191,20 @@ for entry in "${MATERIALIZATIONS[@]}"; do
       echo "    Dimension change: ${dim_table} (${changed} new versions)"
 
       # Delete materialized rows affected by the dimension change
+      # If Pass 0 already repaired the lookback window, only repair older rows
+      if [ "$pass0_repaired" = true ]; then
+        dim_repair_upper="AND ${view_ts_col} < TIMESTAMP '${lookback_start}'"
+      else
+        dim_repair_upper=""
+      fi
+
       ${TRINO} --execute "
         DELETE FROM iceberg.db.${mat_table}
         WHERE ${fk_col} IN (
           SELECT ${dim_pk} FROM iceberg.db.${dim_table}
           WHERE valid_from > TIMESTAMP '${watermark}'
         )
+        ${dim_repair_upper}
       " 2>/dev/null
 
       # Re-insert affected rows from the view (with fresh dimension values)
@@ -137,6 +215,7 @@ for entry in "${MATERIALIZATIONS[@]}"; do
           ON v.${fk_col} = d.${dim_pk}
           AND d.valid_from > TIMESTAMP '${watermark}'
         WHERE v.${view_ts_col} <= TIMESTAMP '${watermark}'
+          ${dim_repair_upper}
       " 2>/dev/null
 
       dim_changed_count=$((dim_changed_count + 1))
@@ -249,7 +328,8 @@ for entry in "${MATERIALIZATIONS[@]}"; do
     DELETE FROM iceberg.db.materialization_watermarks WHERE table_name = '${mat_table}'
   " 2>/dev/null || true
   ${TRINO} --execute "
-    INSERT INTO iceberg.db.materialization_watermarks VALUES ('${mat_table}', current_timestamp)
+    INSERT INTO iceberg.db.materialization_watermarks
+    VALUES ('${mat_table}', (SELECT MAX(${fact_ts_col}) FROM iceberg.db.${fact_table}))
   " 2>/dev/null
 
   echo "    OK"

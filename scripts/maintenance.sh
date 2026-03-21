@@ -51,6 +51,12 @@ for table in \
   mat_bid_landscape_hourly \
   mat_realtime_serving_metrics_1m \
   mat_full_funnel; do
+  # Skip tables that don't exist yet (e.g., mat_* before first materialization run)
+  if ! ${TRINO} --execute "DESCRIBE ${table}" &>/dev/null; then
+    echo "==> Skipping 'db.${table}' (table does not exist)"
+    continue
+  fi
+
   echo "==> Starting Iceberg table maintenance for 'db.${table}'..."
 
   echo ""

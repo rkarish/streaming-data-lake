@@ -255,7 +255,7 @@
         {
             "label": "materialize-views",
             "type": "shell",
-            "command": "bash scripts/materialize.sh",
+            "command": "LOOKBACK_HOURS=3 bash scripts/materialize.sh",
             "options": {
                 "cwd": "${workspaceFolder}"
             },

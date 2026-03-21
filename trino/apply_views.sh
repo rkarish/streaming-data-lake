@@ -23,7 +23,7 @@ while IFS= read -r line; do
   # If line ends with semicolon, execute the accumulated statement
   if [[ "$line" =~ \;[[:space:]]*$ ]]; then
     # Extract view name for logging
-    view_name=$(echo "$current_stmt" | grep -oiE 'VIEW [a-z_.]+' | head -1 | awk '{print $2}')
+    view_name=$(echo "$current_stmt" | grep -oiE 'VIEW [a-z0-9_.]+' | head -1 | awk '{print $2}')
     if [ -n "$view_name" ]; then
       if docker exec trino trino --execute "$current_stmt" 2>/dev/null; then
         echo "    OK    $view_name"
