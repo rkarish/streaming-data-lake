@@ -1942,7 +1942,7 @@ Update the Flink SQL pipeline to pass through the new fields:
 
 | File | Purpose |
 |---|---|
-| `mock-data-gen/src/dimension_mapping.py` | Shared deterministic hierarchy builder |
+| `mock-data-gen/mock_data_gen/dimension_mapping.py` | Shared deterministic hierarchy builder |
 | `iceberg/seed_dimensions.py` | Writes dimension data to Iceberg via PyIceberg + PyArrow |
 | `iceberg/tables/dim_agency.yml` | Table definition |
 | `iceberg/tables/dim_advertiser.yml` | Table definition |
