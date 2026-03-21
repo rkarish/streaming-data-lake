@@ -1,0 +1,28 @@
+namespace: db
+table: dim_geo
+format_version: 2
+schema:
+  - name: geo_key
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: country_code
+    type: string
+  - name: country_name
+    type: string
+  - name: region_code
+    type: string
+  - name: region_name
+    type: string
+  - name: timezone
+    type: string
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - geo_key
+  - valid_from

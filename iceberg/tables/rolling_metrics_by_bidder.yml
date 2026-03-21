@@ -7,7 +7,7 @@ schema:
   - name: window_end
     type: timestamp
   - name: bidder_id
-    type: string
+    type: int
   - name: win_count
     type: long
   - name: revenue

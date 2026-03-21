@@ -5,7 +5,7 @@ schema:
   - name: window_start
     type: timestamp
   - name: publisher_id
-    type: string
+    type: int
   - name: requests_no_response
     type: long
   - name: responses_no_impression

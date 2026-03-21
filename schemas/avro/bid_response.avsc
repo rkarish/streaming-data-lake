@@ -12,7 +12,7 @@
           "type": "record",
           "name": "SeatBid",
           "fields": [
-            {"name": "seat", "type": "string"},
+            {"name": "seat", "type": "int"},
             {
               "name": "bid",
               "type": {
@@ -25,14 +25,19 @@
                     {"name": "impid", "type": "string"},
                     {"name": "price", "type": "double"},
                     {"name": "adid", "type": "string"},
-                    {"name": "crid", "type": "string"},
+                    {"name": "crid", "type": "int"},
                     {
                       "name": "adomain",
                       "type": {"type": "array", "items": "string"}
                     },
                     {"name": "w", "type": "int"},
                     {"name": "h", "type": "int"},
-                    {"name": "dealid", "type": ["null", "string"], "default": null}
+                    {"name": "dealid", "type": ["null", "int"], "default": null},
+                    {"name": "campaign_id", "type": ["null", "int"], "default": null},
+                    {"name": "line_item_id", "type": ["null", "int"], "default": null},
+                    {"name": "strategy_id", "type": ["null", "int"], "default": null},
+                    {"name": "advertiser_id", "type": ["null", "int"], "default": null},
+                    {"name": "agency_id", "type": ["null", "int"], "default": null}
                   ]
                 }
               }

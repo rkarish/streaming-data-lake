@@ -1,5 +1,9 @@
 # Project Instructions
 
+## Project Context
+
+Although named "playground", this project is a **reference architecture** for an adtech data lake. It should be built to production standards: proper data modeling, integer surrogate keys, SCD Type 2 dimensions, clean Python packaging, idempotent scripts, and best practices throughout. Treat every decision as if this were a production system.
+
 ## Design Documents
 
 All design documents are located in the `.design/` directory. Review these before making architectural decisions or implementing new features.

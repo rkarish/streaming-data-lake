@@ -1,0 +1,13 @@
+namespace: db
+table: materialization_watermarks
+format_version: 2
+schema:
+  - name: table_name
+    type: string
+  - name: last_materialized_at
+    type: timestamptz
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - table_name

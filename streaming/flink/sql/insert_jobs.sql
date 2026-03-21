@@ -13,7 +13,7 @@ BEGIN
 
 -- Insert bid_requests: flatten nested arrays into Iceberg table
 -- Supports both site and app traffic (mutually exclusive)
--- Filters out test publishers (test-*) and private IPs for clean analytics
+-- Filters out test publishers (negative IDs) and private IPs for clean analytics
 INSERT INTO iceberg_catalog.db.bid_requests
 SELECT
     `id` AS request_id,
@@ -47,7 +47,7 @@ FROM kafka_bid_requests
 CROSS JOIN UNNEST(`imp`) AS imp_t(`imp_id`, `imp_banner`, `imp_bidfloor`, `imp_bidfloorcur`, `imp_secure`)
 WHERE
     -- Exclude test publishers
-    COALESCE(`site`.`publisher`.`id`, `app`.`publisher`.`id`) NOT LIKE 'test-%'
+    COALESCE(`site`.`publisher`.`id`, `app`.`publisher`.`id`) > 0
     -- Exclude private IPs (RFC1918 ranges)
     AND `device`.`ip` NOT LIKE '10.%'
     AND `device`.`ip` NOT LIKE '192.168.%'
@@ -101,9 +101,9 @@ SELECT
     `cur`[1] AS currency,
     CASE WHEN `regs`.`coppa` = 1 THEN TRUE ELSE FALSE END AS is_coppa,
     CASE WHEN `regs`.`ext`.`gdpr` = 1 THEN TRUE ELSE FALSE END AS is_gdpr,
-    -- Test traffic flag: publisher ID starts with 'test-'
+    -- Test traffic flag: negative publisher IDs indicate test traffic
     CASE
-        WHEN COALESCE(`site`.`publisher`.`id`, `app`.`publisher`.`id`) LIKE 'test-%' THEN TRUE
+        WHEN COALESCE(`site`.`publisher`.`id`, `app`.`publisher`.`id`) < 0 THEN TRUE
         ELSE FALSE
     END AS is_test_traffic,
     -- Private IP flag: RFC1918 private IP ranges
@@ -139,7 +139,7 @@ SELECT
     COALESCE(`site`.`publisher`.`id`, `app`.`publisher`.`id`) AS publisher_id,
     `device`.`ip` AS device_ip,
     CASE
-        WHEN COALESCE(`site`.`publisher`.`id`, `app`.`publisher`.`id`) LIKE 'test-%' THEN 'TEST_PUBLISHER'
+        WHEN COALESCE(`site`.`publisher`.`id`, `app`.`publisher`.`id`) < 0 THEN 'TEST_PUBLISHER'
         WHEN `device`.`ip` LIKE '10.%'
             OR `device`.`ip` LIKE '192.168.%'
             OR `device`.`ip` LIKE '172.16.%'
@@ -160,7 +160,7 @@ SELECT
 FROM kafka_bid_requests
 CROSS JOIN UNNEST(`imp`) AS imp_t(`imp_id`, `imp_banner`, `imp_bidfloor`, `imp_bidfloorcur`, `imp_secure`)
 WHERE
-    COALESCE(`site`.`publisher`.`id`, `app`.`publisher`.`id`) LIKE 'test-%'
+    COALESCE(`site`.`publisher`.`id`, `app`.`publisher`.`id`) < 0
     OR `device`.`ip` LIKE '10.%'
     OR `device`.`ip` LIKE '192.168.%'
     OR `device`.`ip` LIKE '172.16.%'
@@ -184,6 +184,11 @@ SELECT
     bid_crid AS creative_id,
     bid_dealid AS deal_id,
     bid_adomain[1] AS ad_domain,
+    bid_campaign_id AS campaign_id,
+    bid_line_item_id AS line_item_id,
+    bid_strategy_id AS strategy_id,
+    bid_advertiser_id AS advertiser_id,
+    bid_agency_id AS agency_id,
     `cur` AS currency,
     CAST(
         TO_TIMESTAMP(SUBSTRING(`event_timestamp`, 1, 26), 'yyyy-MM-dd''T''HH:mm:ss.SSSSSS')
@@ -191,7 +196,7 @@ SELECT
     ) AS event_timestamp
 FROM kafka_bid_responses
 CROSS JOIN UNNEST(`seatbid`) AS seatbid_t(`seat`, `seat_bids`)
-CROSS JOIN UNNEST(seat_bids) AS bid_t(`bid_id`, `bid_impid`, `bid_price`, `bid_adid`, `bid_crid`, `bid_adomain`, `bid_dealid`, `bid_w`, `bid_h`);
+CROSS JOIN UNNEST(seat_bids) AS bid_t(`bid_id`, `bid_impid`, `bid_price`, `bid_adid`, `bid_crid`, `bid_adomain`, `bid_dealid`, `bid_w`, `bid_h`, `bid_campaign_id`, `bid_line_item_id`, `bid_strategy_id`, `bid_advertiser_id`, `bid_agency_id`);
 
 -- Insert impressions: flat structure, 1:1 mapping
 INSERT INTO iceberg_catalog.db.impressions

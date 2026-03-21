@@ -28,14 +28,14 @@ CREATE TEMPORARY TABLE kafka_bid_requests (
         `domain` STRING,
         `cat` ARRAY<STRING>,
         `page` STRING,
-        `publisher` ROW<`id` STRING, `name` STRING>
+        `publisher` ROW<`id` INT, `name` STRING>
     >,
     `app` ROW<
         `id` STRING,
         `bundle` STRING,
         `storeurl` STRING,
         `cat` ARRAY<STRING>,
-        `publisher` ROW<`id` STRING, `name` STRING>
+        `publisher` ROW<`id` INT, `name` STRING>
     >,
     `device` ROW<
         `ua` STRING,
@@ -85,17 +85,22 @@ CREATE TEMPORARY TABLE kafka_bid_requests (
 CREATE TEMPORARY TABLE kafka_bid_responses (
     `id` STRING,
     `seatbid` ARRAY<ROW<
-        `seat` STRING,
+        `seat` INT,
         `bid` ARRAY<ROW<
             `id` STRING,
             `impid` STRING,
             `price` DOUBLE,
             `adid` STRING,
-            `crid` STRING,
+            `crid` INT,
             `adomain` ARRAY<STRING>,
-            `dealid` STRING,
+            `dealid` INT,
             `w` INT,
-            `h` INT
+            `h` INT,
+            `campaign_id` INT,
+            `line_item_id` INT,
+            `strategy_id` INT,
+            `advertiser_id` INT,
+            `agency_id` INT
         >>
     >>,
     `bidid` STRING,
@@ -122,10 +127,10 @@ CREATE TEMPORARY TABLE kafka_impressions (
     `request_id` STRING,
     `response_id` STRING,
     `imp_id` STRING,
-    `bidder_id` STRING,
+    `bidder_id` INT,
     `win_price` DOUBLE,
     `win_currency` STRING,
-    `creative_id` STRING,
+    `creative_id` INT,
     `ad_domain` STRING,
     `event_timestamp` STRING,
     -- Computed column: parse ISO timestamp string to TIMESTAMP(3)
@@ -148,8 +153,8 @@ CREATE TEMPORARY TABLE kafka_clicks (
     `request_id` STRING,
     `impression_id` STRING,
     `imp_id` STRING,
-    `bidder_id` STRING,
-    `creative_id` STRING,
+    `bidder_id` INT,
+    `creative_id` INT,
     `click_url` STRING,
     `event_timestamp` STRING,
     -- Computed column: parse ISO timestamp string to TIMESTAMP(3)

@@ -1,0 +1,22 @@
+namespace: db
+table: dim_device_os
+format_version: 2
+schema:
+  - name: os_name
+    type: string
+  - name: valid_from
+    type: timestamptz
+  - name: os_vendor
+    type: string
+  - name: os_family
+    type: string
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - os_name
+  - valid_from

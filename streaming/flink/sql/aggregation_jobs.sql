@@ -178,7 +178,7 @@ LEFT JOIN (
         SELECT
             FLOOR(br.`event_ts` TO HOUR) AS window_start,
             COUNT(DISTINCT CASE
-                WHEN COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`) LIKE 'test-%'
+                WHEN COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`) < 0
                     OR br.`device`.`ip` LIKE '10.%'
                     OR br.`device`.`ip` LIKE '192.168.%'
                     OR br.`device`.`ip` LIKE '172.16.%'
@@ -232,7 +232,7 @@ LEFT JOIN (
 INSERT INTO iceberg_catalog.db.bid_landscape_hourly
 SELECT
     FLOOR(resp.`event_ts` TO HOUR) AS window_start,
-    COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`, 'unknown') AS publisher_id,
+    COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`, 0) AS publisher_id,
     COUNT(DISTINCT resp.`request_id`) AS request_count,
     COUNT(*) AS total_bids,
     CASE
@@ -256,7 +256,7 @@ FROM (
             resp.`event_ts` AS event_ts
         FROM kafka_bid_responses resp
         CROSS JOIN UNNEST(resp.`seatbid`) AS seatbid_t(`seat`, `seat_bids`)
-        CROSS JOIN UNNEST(seat_bids) AS bid_t(`bid_id`, `bid_impid`, `bid_price`, `bid_adid`, `bid_crid`, `bid_adomain`, `bid_dealid`, `bid_w`, `bid_h`)
+        CROSS JOIN UNNEST(seat_bids) AS bid_t(`bid_id`, `bid_impid`, `bid_price`, `bid_adid`, `bid_crid`, `bid_adomain`, `bid_dealid`, `bid_w`, `bid_h`, `bid_campaign_id`, `bid_line_item_id`, `bid_strategy_id`, `bid_advertiser_id`, `bid_agency_id`)
     ) expanded_resp
     GROUP BY
         bid_id,
@@ -267,7 +267,7 @@ LEFT JOIN kafka_bid_requests br
     AND br.`event_ts` BETWEEN resp.`event_ts` - INTERVAL '10' SECOND AND resp.`event_ts` + INTERVAL '5' SECOND
 GROUP BY
     FLOOR(resp.`event_ts` TO HOUR),
-    COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`, 'unknown');
+    COALESCE(br.`site`.`publisher`.`id`, br.`app`.`publisher`.`id`, 0);
 
 -- One-minute serving metrics for low-latency monitoring.
 INSERT INTO iceberg_catalog.db.realtime_serving_metrics_1m

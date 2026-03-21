@@ -1,0 +1,24 @@
+namespace: db
+table: dim_device_type
+format_version: 2
+schema:
+  - name: device_type_code
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: device_type_name
+    type: string
+  - name: form_factor
+    type: string
+  - name: is_mobile
+    type: boolean
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - device_type_code
+  - valid_from

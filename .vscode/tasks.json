@@ -253,6 +253,20 @@
             "problemMatcher": []
         },
         {
+            "label": "materialize-views",
+            "type": "shell",
+            "command": "LOOKBACK_HOURS=3 bash scripts/materialize.sh",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "run-table-maintenance",
             "type": "shell",
             "command": "bash scripts/maintenance.sh",

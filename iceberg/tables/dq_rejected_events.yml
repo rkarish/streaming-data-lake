@@ -7,7 +7,7 @@ schema:
   - name: imp_id
     type: string
   - name: publisher_id
-    type: string
+    type: int
   - name: device_ip
     type: string
   - name: reject_reason

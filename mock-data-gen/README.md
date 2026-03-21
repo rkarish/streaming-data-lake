@@ -38,7 +38,7 @@ pip install -e .
 ### Run directly
 
 ```bash
-python -m src.generator
+python -m mock_data_gen.generator
 ```
 
 ### Run via entry point (after install)
@@ -84,7 +84,7 @@ EVENTS_PER_SECOND=50 \
 BID_RESPONSE_RATE=0.70 \
 WIN_RATE=0.20 \
 CLICK_RATE=0.03 \
-python -m src.generator
+python -m mock_data_gen.generator
 ```
 
 ## Kafka Topics
@@ -235,7 +235,7 @@ mock-data-gen/
 For local debugging against a Docker Compose Kafka instance, use the host-exposed port:
 
 ```bash
-KAFKA_BOOTSTRAP_SERVERS=localhost:29092 python -m src.generator
+KAFKA_BOOTSTRAP_SERVERS=localhost:29092 python -m mock_data_gen.generator
 ```
 
 Or use the VS Code launch configuration from the project root (see `.vscode/launch.json`).

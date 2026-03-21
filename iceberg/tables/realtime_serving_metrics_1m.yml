@@ -5,7 +5,7 @@ schema:
   - name: window_start
     type: timestamp
   - name: bidder_id
-    type: string
+    type: int
   - name: impressions
     type: long
   - name: clicks

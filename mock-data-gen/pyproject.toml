@@ -12,4 +12,4 @@ dependencies = [
 ]
 
 [project.scripts]
-mock-data-gen = "src.generator:main"
+mock-data-gen = "mock_data_gen.generator:main"

@@ -1,0 +1,28 @@
+namespace: db
+table: dim_campaign
+format_version: 2
+schema:
+  - name: campaign_id
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: advertiser_id
+    type: int
+  - name: campaign_name
+    type: string
+  - name: objective
+    type: string
+  - name: start_date
+    type: string
+  - name: end_date
+    type: string
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - campaign_id
+  - valid_from

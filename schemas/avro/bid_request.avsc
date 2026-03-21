@@ -126,7 +126,7 @@
               "type": "record",
               "name": "Publisher",
               "fields": [
-                {"name": "id", "type": "string"},
+                {"name": "id", "type": "int"},
                 {"name": "name", "type": "string"}
               ]
             }

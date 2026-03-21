@@ -1793,6 +1793,221 @@ identifier_fields:
 - **Schema evolution**: The script is idempotent — existing tables are skipped with detailed drift detection (column types, requiredness, identifier fields, and partition spec). Altering live tables still requires manual `ALTER TABLE` or recreation.
 - **Reviewable changes**: Adding a column or changing a partition spec is a one-line YAML edit visible in a PR diff.
 
+### Phase 12: Dimensional Data with SCD Type 2
+
+#### 12.1 Overview & Motivation
+
+The streaming pipeline currently stores only denormalized fact data. In real adtech, DSPs (bidders) pass IDs in bid responses and the SSP/exchange resolves them against dimension tables for reporting. This phase adds SCD Type 2 dimension tables to the Iceberg database, seeds them with static mock data, and updates bid response events to carry DSP hierarchy IDs.
+
+This phase also adds Trino views that join facts with dimensions, a materialization workflow for pre-computed tables, and supporting maintenance scripts.
+
+#### 12.2 DSP Hierarchy (Buy-Side)
+
+The buy-side hierarchy represents the internal structure of each DSP:
+
+```
+agency → advertiser → campaign → line_item → strategy → creative
+```
+
+Each level carries its parent FK so joins can walk up the hierarchy. The `dim_creative` table bridges to the fact tables via the existing `creative_id` field.
+
+| Table | PK | ~Rows | Key Columns |
+|---|---|---|---|
+| `dim_agency` | `agency_id` | 5 | agency_name, holding_company, headquarters |
+| `dim_advertiser` | `advertiser_id` | 20 | agency_id (FK), advertiser_name, industry, domain |
+| `dim_campaign` | `campaign_id` | 60 | advertiser_id (FK), campaign_name, objective, start_date, end_date |
+| `dim_line_item` | `line_item_id` | 120 | campaign_id (FK), line_item_name, budget, bid_strategy |
+| `dim_strategy` | `strategy_id` | 180 | line_item_id (FK), strategy_name, targeting_type, channel |
+| `dim_creative` | `creative_id` | 50 | strategy_id (FK), creative_name, format, width, height, landing_page_url |
+| `dim_bidder` | `bidder_id` | 5 | bidder_name, domain, exchange_seat, region |
+
+#### 12.3 Supply-Side & Reference Dimensions
+
+| Table | PK | ~Rows | Key Columns |
+|---|---|---|---|
+| `dim_publisher` | `publisher_id` | 30 | publisher_name, domain, vertical, tier |
+| `dim_deal` | `deal_id` | 19 | deal_name, deal_type, floor_price, buyer_seat, seller_id |
+| `dim_geo` | `geo_key` | 24 | country_code, country_name, region_code, region_name, timezone |
+| `dim_device_type` | `device_type_code` | 4 | device_type_name, form_factor, is_mobile |
+| `dim_device_os` | `os_name` | 4 | os_vendor, os_family |
+| `dim_browser` | `browser_id` | 6 | browser_name, vendor, engine |
+
+#### 12.4 Integer ID Convention
+
+All dimension primary keys and foreign keys use integer types (`int`) rather than strings. This improves join performance, reduces storage, and follows dimensional modeling best practices.
+
+| ID Field | Type | Scope |
+|---|---|---|
+| `agency_id`, `advertiser_id`, `campaign_id`, `line_item_id`, `strategy_id` | int | DSP hierarchy (new) |
+| `creative_id`, `bidder_id`/`seat`, `publisher_id`, `deal_id` | int | Existing business keys (changed from string) |
+| `geo_key`, `browser_id`, `device_type_code` | int | Reference dimensions |
+| `os_name` | string | Retained as string (natural key matching fact tables) |
+
+**Test publisher convention**: With integer publisher IDs, test publishers use negative IDs (e.g., `-42`). The Flink SQL filter changes from `NOT LIKE 'test-%'` to `> 0` for valid traffic, and `< 0` for test traffic detection.
+
+#### 12.5 SCD Type 2 Pattern
+
+All dimension tables use the SCD Type 2 pattern with these shared columns:
+
+- `valid_from` (timestamptz) — when this version of the row became active
+- `valid_to` (timestamptz) — when this version was superseded (NULL for current rows)
+- `is_current` (boolean) — TRUE for the latest version of each entity
+
+Identifier fields for each table are the business key + `valid_from` (composite PK for upsert). No time-based partitioning needed given the small cardinalities. All tables use `format_version: 2` and `write.upsert.enabled: "true"`.
+
+Example schema (`dim_agency`):
+
+```yaml
+namespace: db
+table: dim_agency
+format_version: 2
+schema:
+  - name: agency_id
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: agency_name
+    type: string
+  - name: holding_company
+    type: string
+  - name: headquarters
+    type: string
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - agency_id
+  - valid_from
+```
+
+#### 12.6 Avro Schema Changes
+
+Add five nullable fields to the `Bid` record inside `bid_response.avsc`:
+
+```json
+{"name": "campaign_id", "type": ["null", "int"], "default": null},
+{"name": "line_item_id", "type": ["null", "int"], "default": null},
+{"name": "strategy_id", "type": ["null", "int"], "default": null},
+{"name": "advertiser_id", "type": ["null", "int"], "default": null},
+{"name": "agency_id", "type": ["null", "int"], "default": null}
+```
+
+All five are nullable union types with `null` default. Additionally, `bid_request.avsc`, `impression.avsc`, and `click.avsc` have their ID fields updated from string to int to match the integer ID convention. Since the reference architecture always registers schemas fresh (no pre-existing subjects to evolve), this is safe despite not being Avro BACKWARD-compatible in the strict sense.
+
+#### 12.7 Dimension Seeding
+
+A new script `iceberg/seed_dimensions.py` generates and writes all dimension data directly to Iceberg via PyIceberg + PyArrow. This runs at setup time (after `apply_tables.py`, before Flink starts).
+
+The dimension hierarchy is built deterministically from a shared mapping module (`mock-data-gen/mock_data_gen/dimension_mapping.py`) so that both the seeder and the event generator agree on the ID-to-hierarchy mapping:
+
+```
+5 agencies → 4 advertisers each (20) → 3 campaigns each (60)
+  → 2 line items each (120) → ~1.5 strategies each (180)
+  → assigned to creatives (50)
+```
+
+Initial seed: all rows get `valid_from = '2020-01-01T00:00:00Z'`, `valid_to = NULL`, `is_current = TRUE`.
+
+#### 12.8 Mock Data Generator Changes
+
+Update `generate_bid_response()` in `schemas.py` to populate the five new DSP hierarchy fields by looking up the selected `creative_id` in the shared dimension mapping:
+
+```python
+crid = random.choice(CREATIVE_IDS)
+hierarchy = CREATIVE_HIERARCHY[crid]
+bid_obj = {
+    ...
+    "crid": crid,
+    "campaign_id": hierarchy["campaign_id"],
+    "line_item_id": hierarchy["line_item_id"],
+    "strategy_id": hierarchy["strategy_id"],
+    "advertiser_id": hierarchy["advertiser_id"],
+    "agency_id": hierarchy["agency_id"],
+}
+```
+
+#### 12.9 Flink SQL Changes
+
+Update the Flink SQL pipeline to pass through the new fields:
+
+1. **`create_tables.sql`** — Add the five new fields to the `kafka_bid_responses` ROW type inside the `seatbid[].bid[]` array.
+2. **`insert_jobs.sql`** — Update the `CROSS JOIN UNNEST` aliases and SELECT for the bid_responses INSERT to include the five new columns.
+3. **`aggregation_jobs.sql`** — Update the UNNEST aliases in the `bid_landscape_hourly` INSERT (positional destructuring requires all fields listed even if unused by the query).
+
+#### 12.10 New Files
+
+| File | Purpose |
+|---|---|
+| `mock-data-gen/mock_data_gen/dimension_mapping.py` | Shared deterministic hierarchy builder |
+| `iceberg/seed_dimensions.py` | Writes dimension data to Iceberg via PyIceberg + PyArrow |
+| `iceberg/tables/dim_agency.yml` | Table definition |
+| `iceberg/tables/dim_advertiser.yml` | Table definition |
+| `iceberg/tables/dim_campaign.yml` | Table definition |
+| `iceberg/tables/dim_line_item.yml` | Table definition |
+| `iceberg/tables/dim_strategy.yml` | Table definition |
+| `iceberg/tables/dim_creative.yml` | Table definition |
+| `iceberg/tables/dim_bidder.yml` | Table definition |
+| `iceberg/tables/dim_publisher.yml` | Table definition |
+| `iceberg/tables/dim_deal.yml` | Table definition |
+| `iceberg/tables/dim_geo.yml` | Table definition |
+| `iceberg/tables/dim_device_type.yml` | Table definition |
+| `iceberg/tables/dim_device_os.yml` | Table definition |
+| `iceberg/tables/dim_browser.yml` | Table definition |
+
+#### 12.11 Modified Files Summary
+
+| File | Change |
+|---|---|
+| `schemas/avro/bid_response.avsc` | Add nullable `campaign_id`, `line_item_id`, `strategy_id`, `advertiser_id`, `agency_id` to Bid record |
+| `iceberg/tables/bid_responses.yml` | Add 5 new columns to fact table schema |
+| `iceberg/requirements.txt` | Add `pyarrow` |
+| `mock-data-gen/src/schemas.py` | Populate new DSP hierarchy IDs in `generate_bid_response()` from dimension mapping |
+| `streaming/flink/sql/create_tables.sql` | Add 5 new fields to `kafka_bid_responses` source table ROW type |
+| `streaming/flink/sql/insert_jobs.sql` | Update UNNEST aliases and SELECT for bid_responses INSERT |
+| `streaming/flink/sql/aggregation_jobs.sql` | Update UNNEST aliases in bid_landscape_hourly (positional destructuring) |
+| `scripts/setup.sh` | Add dimension seeding step after table creation |
+
+#### 12.12 Considerations
+
+- **Schema drift**: After adding columns to `bid_responses.yml`, running `apply_tables.py` against an existing catalog with the old schema will report drift. The table must be dropped and recreated, or an `ALTER TABLE ADD COLUMN` run manually.
+- **UNNEST positional destructuring**: Adding fields to the Avro schema means adding them to every UNNEST alias list that touches `seatbid[].bid[]`. Missing a single one causes field misalignment.
+- **Package layout**: The mock-data-gen package was restructured from `src/` to `mock_data_gen/` for proper Python packaging. The `seed_dimensions.py` script imports `mock_data_gen.dimension_mapping` directly, relying on `scripts/setup.sh` to install the package into the virtualenv so it is available on the Python path.
+
+#### 12.13 Trino Views
+
+9 Trino views in `trino/views.sql` pre-join fact tables with current dimension attributes (`is_current = true`). Applied at setup time via `trino/apply_views.sh`. All views use `CREATE OR REPLACE` for idempotency.
+
+The `v_full_funnel` view is a row-level 4-way LEFT JOIN across the entire event funnel (request → response → impression → click) with all dimension attributes and boolean stage flags (`has_response`, `has_impression`, `has_click`) for drop-off analysis.
+
+For time-travel reporting (what was the dimension value when the event occurred), query the fact tables directly and join on `valid_from`/`valid_to` ranges instead of `is_current`.
+
+#### 12.14 Incremental Materialization
+
+Materialized tables (`mat_*`) are physical Iceberg copies of the views for dashboard performance. Managed by `scripts/materialize.sh` with high-watermark-based incremental updates.
+
+**Watermark tracking**: The `materialization_watermarks` table stores one row per materialized table with the timestamp of the last successful run.
+
+**Three-pass incremental strategy**:
+
+1. **Dimension changes**: For each dimension FK, check if any dimension rows have `valid_from > watermark`. If so, DELETE affected mat rows and re-INSERT from the live view with fresh dimension values.
+2. **New facts**: INSERT rows from the view where `event_timestamp > watermark`.
+3. **Late funnel events** (mat_full_funnel only): Repair rows where the request was materialized with `has_response/has_impression/has_click = false` but the downstream event now exists. Uses existence checks against the live fact tables, then DELETE + re-INSERT from the view.
+
+**First run**: If no materialized table exists, creates it via `CREATE TABLE AS SELECT * FROM v_*` (full load).
+
+**Orchestration**: Currently a manual script; will be moved to Apache Airflow for scheduled, observable execution.
+
+#### 12.15 Considerations
+
+- **Schema drift**: After adding columns to `bid_responses.yml`, running `apply_tables.py` against an existing catalog with the old schema will report drift. The table must be dropped and recreated, or an `ALTER TABLE ADD COLUMN` run manually.
+- **UNNEST positional destructuring**: Adding fields to the Avro schema means adding them to every UNNEST alias list that touches `seatbid[].bid[]`. Missing a single one causes field misalignment.
+- **Funnel repair boundary effect**: The mock data generator produces all funnel stages synchronously, so the late-event repair pass rarely triggers. In production with independent event sources, the repair pass would catch events split across batch boundaries.
+- **Delete file accumulation**: The dimension change and funnel repair passes produce Iceberg delete files. Run `maintenance.sh` after materialization to compact them.
+
 ### Forward-Looking
 
 The following areas are candidates for future design phases:
@@ -1800,7 +2015,7 @@ The following areas are candidates for future design phases:
 - **Cloud Readiness**: Parameterize storage and catalog configs for AWS/GCP, document deployment steps for each cloud, CI/CD pipeline for streaming job deployment
 - Additional phases TBD
 
-## 12. References
+## 13. References
 
 - [OpenRTB 2.6 Specification (IAB GitHub)](https://github.com/InteractiveAdvertisingBureau/openrtb2.x/blob/main/2.6.md)
 - [OpenRTB 2.6 PDF (IAB Tech Lab)](https://iabtechlab.com/wp-content/uploads/2022/04/OpenRTB-2-6_FINAL.pdf)

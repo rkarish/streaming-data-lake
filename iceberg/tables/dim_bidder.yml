@@ -1,0 +1,26 @@
+namespace: db
+table: dim_bidder
+format_version: 2
+schema:
+  - name: bidder_id
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: bidder_name
+    type: string
+  - name: domain
+    type: string
+  - name: exchange_seat
+    type: int
+  - name: region
+    type: string
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - bidder_id
+  - valid_from

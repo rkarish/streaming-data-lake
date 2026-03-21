@@ -231,6 +231,46 @@ docker exec trino trino --catalog iceberg --schema db \
              LIMIT 10"
 ```
 
+### Dimension Tables (SCD Type 2)
+
+The pipeline includes 13 dimension tables with Slowly Changing Dimension Type 2 semantics (`valid_from`, `valid_to`, `is_current`). All dimension IDs use integer types. Dimension data is seeded at setup time via `iceberg/seed_dimensions.py`.
+
+**DSP Hierarchy** (buy-side): `dim_agency` → `dim_advertiser` → `dim_campaign` → `dim_line_item` → `dim_strategy` → `dim_creative`
+
+**Supply-side & Reference**: `dim_bidder`, `dim_publisher`, `dim_deal`, `dim_geo`, `dim_device_type`, `dim_device_os`, `dim_browser`
+
+Bid response events carry DSP hierarchy IDs (`agency_id`, `advertiser_id`, `campaign_id`, `line_item_id`, `strategy_id`) that reference these dimension tables. Test publishers use negative IDs for traffic filtering.
+
+### Trino Views
+
+9 Trino views pre-join fact tables with dimension attributes (created by `trino/apply_views.sh`):
+
+| View | Description |
+|---|---|
+| `v_bid_requests` | Requests + publisher, device type, device OS, geo |
+| `v_bid_responses` | Responses + full DSP hierarchy (agency through creative) + deal |
+| `v_impressions` | Impressions + bidder, creative |
+| `v_clicks` | Clicks + bidder, creative |
+| `v_hourly_funnel_by_publisher` | Funnel metrics + publisher |
+| `v_rolling_metrics_by_bidder` | Rolling metrics + bidder |
+| `v_bid_landscape_hourly` | Bid landscape + publisher |
+| `v_realtime_serving_metrics_1m` | Serving metrics + bidder |
+| `v_full_funnel` | Row-level 4-way join (request → response → impression → click) with all dimensions and `has_response`/`has_impression`/`has_click` flags |
+
+### Materialized Tables
+
+9 materialized Iceberg tables (`mat_*`) mirror the views as physical tables for dashboard performance. Managed by `scripts/materialize.sh` with incremental updates:
+
+- **New facts**: Appends rows where `event_timestamp > last_watermark`
+- **Dimension changes**: Deletes and re-inserts rows affected by changed dimensions
+- **Late funnel events**: Repairs `mat_full_funnel` rows where downstream events (responses, impressions, clicks) arrived after the request was materialized
+
+```bash
+bash scripts/materialize.sh
+```
+
+Watermarks are tracked per table in `materialization_watermarks`. The materialization workflow will be moved to Apache Airflow for scheduled execution.
+
 ### 7. CloudBeaver (Web SQL IDE)
 
 Open [http://localhost:8978](http://localhost:8978). On the first launch you will need to complete the setup wizard:
@@ -324,7 +364,7 @@ bash scripts/setup-generator-local-debug.sh
 
 ### 4. Run/debug with VS Code
 
-Use the **"Mock Data Generator"** launch configuration (in `.vscode/launch.json`) to run or debug the generator. It points at `localhost:29092` and includes all funnel rate environment variables. Set breakpoints in `mock-data-gen/src/` and press F5.
+Use the **"Mock Data Generator"** launch configuration (in `.vscode/launch.json`) to run or debug the generator. It points at `localhost:29092` and includes all funnel rate environment variables. Set breakpoints in `mock-data-gen/mock_data_gen/` and press F5.
 
 To test hourly window aggregations without waiting an hour, use the **"Mock Data Generator (2h Backfill)"** launch configuration instead. It generates 2 hours of historical events at max speed before switching to real-time, so Flink's hourly tumble windows emit results within seconds.
 
@@ -405,6 +445,7 @@ Run any task via **Terminal > Run Task...** (or `Cmd+Shift+P` > "Tasks: Run Task
 | `clear-data (session-mode)` | Purge Kafka, wipe Iceberg/MinIO, restart Flink jobs (session mode) |
 | `teardown-flink-k8s` | Tear down Flink Kubernetes resources |
 | `run-table-maintenance` | Run Iceberg table maintenance (compaction, snapshot expiry, orphan cleanup) |
+| `materialize-views` | Incrementally materialize dimension-enriched views into physical Iceberg tables |
 | `run-query-examples` | Run sample analytical queries via Trino |
 
 ### Logs

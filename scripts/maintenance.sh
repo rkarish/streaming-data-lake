@@ -27,7 +27,36 @@ for table in \
   dq_event_quality_hourly \
   bid_landscape_hourly \
   realtime_serving_metrics_1m \
-  funnel_leakage_hourly; do
+  funnel_leakage_hourly \
+  dim_agency \
+  dim_advertiser \
+  dim_campaign \
+  dim_line_item \
+  dim_strategy \
+  dim_creative \
+  dim_bidder \
+  dim_publisher \
+  dim_deal \
+  dim_geo \
+  dim_device_type \
+  dim_device_os \
+  dim_browser \
+  materialization_watermarks \
+  mat_bid_requests \
+  mat_bid_responses \
+  mat_impressions \
+  mat_clicks \
+  mat_hourly_funnel_by_publisher \
+  mat_rolling_metrics_by_bidder \
+  mat_bid_landscape_hourly \
+  mat_realtime_serving_metrics_1m \
+  mat_full_funnel; do
+  # Skip tables that don't exist yet (e.g., mat_* before first materialization run)
+  if ! ${TRINO} --execute "DESCRIBE ${table}" &>/dev/null; then
+    echo "==> Skipping 'db.${table}' (table does not exist)"
+    continue
+  fi
+
   echo "==> Starting Iceberg table maintenance for 'db.${table}'..."
 
   echo ""

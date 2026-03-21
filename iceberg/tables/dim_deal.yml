@@ -1,0 +1,28 @@
+namespace: db
+table: dim_deal
+format_version: 2
+schema:
+  - name: deal_id
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: deal_name
+    type: string
+  - name: deal_type
+    type: string
+  - name: floor_price
+    type: double
+  - name: buyer_seat
+    type: int
+  - name: seller_id
+    type: int
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - deal_id
+  - valid_from

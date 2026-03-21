@@ -1,0 +1,26 @@
+namespace: db
+table: dim_publisher
+format_version: 2
+schema:
+  - name: publisher_id
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: publisher_name
+    type: string
+  - name: domain
+    type: string
+  - name: vertical
+    type: string
+  - name: tier
+    type: string
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - publisher_id
+  - valid_from

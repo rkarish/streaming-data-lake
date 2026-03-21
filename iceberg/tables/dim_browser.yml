@@ -1,0 +1,24 @@
+namespace: db
+table: dim_browser
+format_version: 2
+schema:
+  - name: browser_id
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: browser_name
+    type: string
+  - name: vendor
+    type: string
+  - name: engine
+    type: string
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - browser_id
+  - valid_from

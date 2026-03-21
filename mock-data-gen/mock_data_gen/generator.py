@@ -22,8 +22,8 @@ from confluent_kafka.serialization import StringSerializer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
 
-from src.config import config
-from src.schemas import (
+from mock_data_gen.config import config
+from mock_data_gen.schemas import (
     generate_bid_request,
     generate_bid_response,
     generate_click,

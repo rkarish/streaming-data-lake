@@ -11,13 +11,13 @@ schema:
   - name: imp_id
     type: string
   - name: bidder_id
-    type: string
+    type: int
   - name: win_price
     type: double
   - name: win_currency
     type: string
   - name: creative_id
-    type: string
+    type: int
   - name: ad_domain
     type: string
   - name: event_timestamp

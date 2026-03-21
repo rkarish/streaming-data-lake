@@ -1,0 +1,26 @@
+namespace: db
+table: dim_line_item
+format_version: 2
+schema:
+  - name: line_item_id
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: campaign_id
+    type: int
+  - name: line_item_name
+    type: string
+  - name: budget
+    type: double
+  - name: bid_strategy
+    type: string
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - line_item_id
+  - valid_from

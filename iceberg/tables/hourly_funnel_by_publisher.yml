@@ -5,7 +5,7 @@ schema:
   - name: window_start
     type: timestamp
   - name: publisher_id
-    type: string
+    type: int
   - name: bid_requests
     type: long
   - name: bid_responses

@@ -16,7 +16,10 @@ from datetime import datetime, timezone, timedelta
 
 from faker import Faker
 
-from src.config import config
+from mock_data_gen.config import config
+from mock_data_gen.dimension_mapping import (
+    BIDDER_IDS, CREATIVE_IDS, DEAL_IDS, PUBLISHER_IDS, build_creative_lookup,
+)
 
 fake = Faker()
 
@@ -163,11 +166,12 @@ def generate_bid_request(base_ts: datetime | None = None) -> dict:
     lon = round(random.uniform(*coords["lon"]), 4)
 
     # Determine if this is a test publisher (for traffic filtering tests)
+    # Test publishers use negative IDs; valid publishers use positive IDs from dimensions
     is_test_publisher = random.random() < config.test_publisher_rate
     if is_test_publisher:
-        pub_id = f"test-{random.randint(100, 999)}"
+        pub_id = -random.randint(1, 999)
     else:
-        pub_id = f"pub-{random.randint(100, 999)}"
+        pub_id = random.choice(PUBLISHER_IDS)
     pub_name = fake.company()
 
     # Assign 1-3 random IAB content categories
@@ -303,17 +307,11 @@ def generate_bid_request(base_ts: datetime | None = None) -> dict:
 # Bid Response data pools
 # ---------------------------------------------------------------------------
 
-# Bidder seat IDs represent different DSPs/advertisers in the auction
-BIDDER_SEATS = ["seat-alpha", "seat-beta", "seat-gamma", "seat-delta", "seat-epsilon"]
-
 # Advertiser domains for ad.txt/sellers.json compliance
 AD_DOMAINS = ["ads.example.com", "media.adnetwork.io", "serve.bidder.co", "cdn.adx.net"]
 
-# Creative IDs representing different ad creatives in the bidder's inventory
-CREATIVE_IDS = [f"cr-{i}" for i in range(1000, 1050)]
-
-# Deal IDs for Private Marketplace (PMP) deals between publishers and advertisers
-DEAL_IDS = [f"deal-{i}" for i in range(1, 20)]
+# DSP hierarchy lookup: creative_id -> {strategy_id, line_item_id, campaign_id, advertiser_id, agency_id}
+CREATIVE_HIERARCHY = build_creative_lookup()
 
 
 def generate_bid_response(bid_request: dict) -> dict:
@@ -345,25 +343,35 @@ def generate_bid_response(bid_request: dict) -> dict:
     # Bid price is above the floor (bidders won't bid below the minimum)
     price = round(bidfloor + random.uniform(0.01, 3.00), 2)
 
+    # Select a creative and resolve its DSP hierarchy
+    crid = random.choice(CREATIVE_IDS)
+    hierarchy = CREATIVE_HIERARCHY[crid]
+
     # Construct the bid object (the actual offer)
     bid_obj = {
         "id": fake.uuid4(),  # Unique bid ID
         "impid": imp["id"],  # References the impression being bid on
         "price": price,  # Bid price in CPM
         "adid": fake.uuid4(),  # Advertiser's ad ID
-        "crid": random.choice(CREATIVE_IDS),  # Creative ID
+        "crid": crid,  # Creative ID
         "adomain": [random.choice(AD_DOMAINS)],  # Advertiser domain(s)
         "w": imp["banner"]["w"],  # Creative width (matches request)
         "h": imp["banner"]["h"],  # Creative height (matches request)
         # 10% of bids are part of a Private Marketplace deal (explicit None for Avro)
         "dealid": random.choice(DEAL_IDS) if random.random() < 0.10 else None,
+        # DSP hierarchy IDs (resolved from dimension mapping)
+        "campaign_id": hierarchy["campaign_id"],
+        "line_item_id": hierarchy["line_item_id"],
+        "strategy_id": hierarchy["strategy_id"],
+        "advertiser_id": hierarchy["advertiser_id"],
+        "agency_id": hierarchy["agency_id"],
     }
 
     return {
         "id": fake.uuid4(),  # Unique response ID
         "seatbid": [
             {
-                "seat": random.choice(BIDDER_SEATS),  # Bidder/DSP identifier
+                "seat": random.choice(BIDDER_IDS),  # Bidder/DSP identifier
                 "bid": [bid_obj],  # Array of bids (typically one per impression)
             }
         ],

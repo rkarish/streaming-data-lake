@@ -1,0 +1,30 @@
+namespace: db
+table: dim_creative
+format_version: 2
+schema:
+  - name: creative_id
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: strategy_id
+    type: int
+  - name: creative_name
+    type: string
+  - name: format
+    type: string
+  - name: width
+    type: int
+  - name: height
+    type: int
+  - name: landing_page_url
+    type: string
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - creative_id
+  - valid_from

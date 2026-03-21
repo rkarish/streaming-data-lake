@@ -7,7 +7,7 @@ schema:
   - name: request_id
     type: string
   - name: seat
-    type: string
+    type: int
   - name: bid_id
     type: string
   - name: imp_id
@@ -15,11 +15,21 @@ schema:
   - name: bid_price
     type: double
   - name: creative_id
-    type: string
+    type: int
   - name: deal_id
-    type: string
+    type: int
   - name: ad_domain
     type: string
+  - name: campaign_id
+    type: int
+  - name: line_item_id
+    type: int
+  - name: strategy_id
+    type: int
+  - name: advertiser_id
+    type: int
+  - name: agency_id
+    type: int
   - name: currency
     type: string
   - name: event_timestamp

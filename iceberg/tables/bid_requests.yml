@@ -19,7 +19,7 @@ schema:
   - name: site_cat
     type: list<string>
   - name: publisher_id
-    type: string
+    type: int
   - name: device_type
     type: int
   - name: device_os

@@ -102,11 +102,20 @@ done
 echo "==> Creating Iceberg tables from YAML definitions..."
 VENV_PYTHON="$SCRIPT_DIR/../.venv/bin/python"
 if [ ! -x "$VENV_PYTHON" ]; then
-  echo "    Virtual environment not found. Creating .venv and installing dependencies..."
+  echo "    Virtual environment not found. Creating .venv..."
   python3 -m venv "$SCRIPT_DIR/../.venv"
-  "$VENV_PYTHON" -m pip install --quiet -r "$SCRIPT_DIR/../iceberg/requirements.txt"
 fi
+"$VENV_PYTHON" -m pip install --quiet -r "$SCRIPT_DIR/../iceberg/requirements.txt"
+"$VENV_PYTHON" -m pip install --quiet -e "$SCRIPT_DIR/../mock-data-gen"
 "$VENV_PYTHON" "$SCRIPT_DIR/../iceberg/apply_tables.py"
+
+# -----------------------------------------------------------------------------
+# Task 3.5: Seed dimension tables with static mock data
+# Dimension data is written directly to Iceberg via PyIceberg.
+# Must run after tables are created (Task 3) and before Flink starts (Task 4).
+# -----------------------------------------------------------------------------
+echo "==> Seeding dimension tables with mock data..."
+"$VENV_PYTHON" "$SCRIPT_DIR/../iceberg/seed_dimensions.py"
 
 # -----------------------------------------------------------------------------
 # Task 4: Deploy Flink streaming jobs on Kubernetes
@@ -125,14 +134,14 @@ while [ $attempt -lt $max_attempts ]; do
   attempt=$((attempt + 1))
   tables=$(docker exec trino trino --catalog iceberg --schema db --execute "SHOW TABLES" 2>/dev/null || true)
   found=true
-  for t in bid_requests bid_responses impressions clicks bid_requests_enriched hourly_impressions_by_geo rolling_metrics_by_bidder hourly_funnel_by_publisher dq_rejected_events dq_event_quality_hourly bid_landscape_hourly realtime_serving_metrics_1m funnel_leakage_hourly; do
+  for t in bid_requests bid_responses impressions clicks bid_requests_enriched hourly_impressions_by_geo rolling_metrics_by_bidder hourly_funnel_by_publisher dq_rejected_events dq_event_quality_hourly bid_landscape_hourly realtime_serving_metrics_1m funnel_leakage_hourly dim_agency dim_advertiser dim_campaign dim_line_item dim_strategy dim_creative dim_bidder dim_publisher dim_deal dim_geo dim_device_type dim_device_os dim_browser materialization_watermarks; do
     if ! echo "$tables" | grep -q "$t"; then
       found=false
       break
     fi
   done
   if [ "$found" = true ]; then
-    echo "    Trino verified: all 13 tables are visible."
+    echo "    Trino verified: all 27 tables are visible."
     break
   fi
   if [ $attempt -eq $max_attempts ]; then
@@ -143,6 +152,9 @@ while [ $attempt -lt $max_attempts ]; do
   echo "    Waiting for Trino... (attempt ${attempt}/${max_attempts})"
   sleep 5
 done
+
+echo "==> Creating Trino views..."
+bash "$SCRIPT_DIR/../trino/apply_views.sh"
 
 # -----------------------------------------------------------------------------
 # Task 6: Wait for CloudBeaver
@@ -200,7 +212,7 @@ echo "==> Setup complete. Infrastructure is ready:"
 echo "    - Schema Registry: Avro schema governance (http://localhost:8085)"
 echo "    - Kafka topics:    bid-requests, bid-responses, impressions, clicks (3 partitions each)"
 echo "    - MinIO bucket:    s3://warehouse"
-echo "    - Iceberg tables:  13 tables created by PyIceberg (iceberg/tables/*.yml)"
+echo "    - Iceberg tables:  27 tables created by PyIceberg (13 dimension + 14 fact/aggregate)"
 echo "    - Flink jobs:      Running on K8s (${FLINK_MODE} mode)"
 if [ "$FLINK_MODE" = "application" ]; then
 echo "    - Flink UI:        http://localhost:8081 (ingestion)"

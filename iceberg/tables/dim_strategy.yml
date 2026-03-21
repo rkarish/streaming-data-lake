@@ -1,0 +1,26 @@
+namespace: db
+table: dim_strategy
+format_version: 2
+schema:
+  - name: strategy_id
+    type: int
+  - name: valid_from
+    type: timestamptz
+  - name: line_item_id
+    type: int
+  - name: strategy_name
+    type: string
+  - name: targeting_type
+    type: string
+  - name: channel
+    type: string
+  - name: valid_to
+    type: timestamptz
+  - name: is_current
+    type: boolean
+partition_spec: []
+properties:
+  write.upsert.enabled: "true"
+identifier_fields:
+  - strategy_id
+  - valid_from
