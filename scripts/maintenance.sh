@@ -46,10 +46,12 @@ for table in \
   mat_bid_responses \
   mat_impressions \
   mat_clicks \
-  mat_hourly_funnel_by_publisher \
-  mat_rolling_metrics_by_bidder \
-  mat_bid_landscape_hourly \
-  mat_realtime_serving_metrics_1m \
+  mat_agg_metrics_by_bidder \
+  mat_agg_bid_landscape \
+  mat_agg_serving_metrics \
+  mat_agg_funnel_by_publisher \
+  mat_agg_funnel_leakage \
+  mat_agg_impressions_by_geo \
   mat_full_funnel; do
   # Skip tables that don't exist yet (e.g., mat_* before first materialization run)
   if ! ${TRINO} --execute "DESCRIBE ${table}" &>/dev/null; then

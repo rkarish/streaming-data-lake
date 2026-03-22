@@ -41,15 +41,17 @@ trino_query() {
 # dim_fk_checks: semicolon-separated list of fk_col:dim_table:dim_pk
 # ---------------------------------------------------------------------------
 MATERIALIZATIONS=(
-  "mat_bid_requests|v_bid_requests|event_timestamp|bid_requests|event_timestamp|publisher_id:dim_publisher:publisher_id;device_type:dim_device_type:device_type_code;device_os:dim_device_os:os_name"
-  "mat_bid_responses|v_bid_responses|event_timestamp|bid_responses|event_timestamp|seat:dim_bidder:bidder_id;creative_id:dim_creative:creative_id;strategy_id:dim_strategy:strategy_id;line_item_id:dim_line_item:line_item_id;campaign_id:dim_campaign:campaign_id;advertiser_id:dim_advertiser:advertiser_id;agency_id:dim_agency:agency_id;deal_id:dim_deal:deal_id"
-  "mat_impressions|v_impressions|event_timestamp|impressions|event_timestamp|bidder_id:dim_bidder:bidder_id;creative_id:dim_creative:creative_id"
-  "mat_clicks|v_clicks|event_timestamp|clicks|event_timestamp|bidder_id:dim_bidder:bidder_id;creative_id:dim_creative:creative_id"
-  "mat_hourly_funnel_by_publisher|v_hourly_funnel_by_publisher|window_start|hourly_funnel_by_publisher|window_start|publisher_id:dim_publisher:publisher_id"
-  "mat_rolling_metrics_by_bidder|v_rolling_metrics_by_bidder|window_start|rolling_metrics_by_bidder|window_start|bidder_id:dim_bidder:bidder_id"
-  "mat_bid_landscape_hourly|v_bid_landscape_hourly|window_start|bid_landscape_hourly|window_start|publisher_id:dim_publisher:publisher_id"
-  "mat_realtime_serving_metrics_1m|v_realtime_serving_metrics_1m|window_start|realtime_serving_metrics_1m|window_start|bidder_id:dim_bidder:bidder_id"
-  "mat_full_funnel|v_full_funnel|request_timestamp|bid_requests|event_timestamp|publisher_id:dim_publisher:publisher_id;seat:dim_bidder:bidder_id;creative_id:dim_creative:creative_id;strategy_id:dim_strategy:strategy_id;line_item_id:dim_line_item:line_item_id;campaign_id:dim_campaign:campaign_id;advertiser_id:dim_advertiser:advertiser_id;agency_id:dim_agency:agency_id;deal_id:dim_deal:deal_id"
+  "mat_bid_requests|v_event_enriched_bid_requests|event_timestamp|bid_requests|event_timestamp|publisher_id:dim_publisher:publisher_id;device_type:dim_device_type:device_type_code;device_os:dim_device_os:os_name"
+  "mat_bid_responses|v_event_enriched_bid_responses|event_timestamp|bid_responses|event_timestamp|seat:dim_bidder:bidder_id;creative_id:dim_creative:creative_id;strategy_id:dim_strategy:strategy_id;line_item_id:dim_line_item:line_item_id;campaign_id:dim_campaign:campaign_id;advertiser_id:dim_advertiser:advertiser_id;agency_id:dim_agency:agency_id;deal_id:dim_deal:deal_id"
+  "mat_impressions|v_event_enriched_impressions|event_timestamp|impressions|event_timestamp|bidder_id:dim_bidder:bidder_id;creative_id:dim_creative:creative_id"
+  "mat_clicks|v_event_enriched_clicks|event_timestamp|clicks|event_timestamp|bidder_id:dim_bidder:bidder_id;creative_id:dim_creative:creative_id"
+  "mat_full_funnel|v_event_enriched_full_funnel|request_timestamp|bid_requests|event_timestamp|publisher_id:dim_publisher:publisher_id;seat:dim_bidder:bidder_id;creative_id:dim_creative:creative_id;strategy_id:dim_strategy:strategy_id;line_item_id:dim_line_item:line_item_id;campaign_id:dim_campaign:campaign_id;advertiser_id:dim_advertiser:advertiser_id;agency_id:dim_agency:agency_id;deal_id:dim_deal:deal_id"
+  "mat_agg_metrics_by_bidder|v_agg_metrics_by_bidder|hour_start|impressions|event_timestamp|bidder_id:dim_bidder:bidder_id"
+  "mat_agg_bid_landscape|v_agg_bid_landscape|hour_start|bid_responses|event_timestamp|publisher_id:dim_publisher:publisher_id"
+  "mat_agg_serving_metrics|v_agg_serving_metrics|hour_start|impressions|event_timestamp|bidder_id:dim_bidder:bidder_id"
+  "mat_agg_funnel_by_publisher|v_agg_funnel_by_publisher|hour_start|bid_requests|event_timestamp|publisher_id:dim_publisher:publisher_id"
+  "mat_agg_funnel_leakage|v_agg_funnel_leakage|hour_start|bid_requests|event_timestamp|publisher_id:dim_publisher:publisher_id"
+  "mat_agg_impressions_by_geo|v_agg_impressions_by_geo|hour_start|impressions|event_timestamp|device_geo_country:dim_geo:country_code"
 )
 
 echo "==> Incremental materialization of dimension-enriched views"
@@ -293,7 +295,7 @@ for entry in "${MATERIALIZATIONS[@]}"; do
 
       ${TRINO} --execute "
         INSERT INTO iceberg.db.mat_full_funnel
-        SELECT v.* FROM iceberg.db.v_full_funnel v
+        SELECT v.* FROM iceberg.db.v_event_enriched_full_funnel v
         WHERE v.request_id IN (
           SELECT br.request_id FROM iceberg.db.bid_requests br
           WHERE br.event_timestamp <= TIMESTAMP '${watermark}'

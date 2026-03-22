@@ -243,23 +243,41 @@ Bid response events carry DSP hierarchy IDs (`agency_id`, `advertiser_id`, `camp
 
 ### Trino Views
 
-9 Trino views pre-join fact tables with dimension attributes (created by `trino/apply_views.sh`):
+Trino views pre-join fact tables with dimension attributes (created by `trino/apply_views.sh` from individual files in `trino/sql/`):
+
+**Event-enriched views** (`v_event_enriched_*`) — fact tables joined with dimensions, materialized for dashboard performance:
 
 | View | Description |
 |---|---|
-| `v_bid_requests` | Requests + publisher, device type, device OS, geo |
-| `v_bid_responses` | Responses + full DSP hierarchy (agency through creative) + deal |
-| `v_impressions` | Impressions + bidder, creative |
-| `v_clicks` | Clicks + bidder, creative |
-| `v_hourly_funnel_by_publisher` | Funnel metrics + publisher |
-| `v_rolling_metrics_by_bidder` | Rolling metrics + bidder |
-| `v_bid_landscape_hourly` | Bid landscape + publisher |
-| `v_realtime_serving_metrics_1m` | Serving metrics + bidder |
-| `v_full_funnel` | Row-level 4-way join (request → response → impression → click) with all dimensions and `has_response`/`has_impression`/`has_click` flags |
+| `v_event_enriched_bid_requests` | Requests + publisher, device type, device OS, geo |
+| `v_event_enriched_bid_responses` | Responses + full DSP hierarchy (agency through creative) + deal |
+| `v_event_enriched_impressions` | Impressions + bidder, creative |
+| `v_event_enriched_clicks` | Clicks + bidder, creative |
+| `v_event_enriched_full_funnel` | Row-level 4-way join (request → response → impression → click) with all dimensions |
+
+**Realtime aggregate views** (`v_realtime_agg_*`) — live views over Flink streaming tables, not materialized:
+
+| View | Description |
+|---|---|
+| `v_realtime_agg_hourly_funnel_by_publisher` | Funnel metrics + publisher |
+| `v_realtime_agg_rolling_metrics_by_bidder` | Rolling metrics + bidder |
+| `v_realtime_agg_bid_landscape_hourly` | Bid landscape + publisher |
+| `v_realtime_agg_serving_metrics_1m` | Serving metrics + bidder |
+
+**Batch aggregate views** (`v_agg_*`) — hourly aggregates computed from fact tables, materialized:
+
+| View | Description |
+|---|---|
+| `v_agg_metrics_by_bidder` | Hourly win metrics by bidder from impressions |
+| `v_agg_bid_landscape` | Hourly auction landscape by publisher |
+| `v_agg_serving_metrics` | Hourly serving metrics (impressions, clicks, CTR) by bidder |
+| `v_agg_funnel_by_publisher` | Hourly funnel conversion metrics by publisher |
+| `v_agg_funnel_leakage` | Hourly funnel drop-off metrics by publisher |
+| `v_agg_impressions_by_geo` | Hourly impression metrics by country |
 
 ### Materialized Tables
 
-9 materialized Iceberg tables (`mat_*`) mirror the views as physical tables for dashboard performance. Managed by `scripts/materialize.sh` with incremental updates:
+Materialized Iceberg tables (`mat_*`) mirror the `v_*` views as physical tables for dashboard performance. Managed by `scripts/materialize.sh` with incremental updates:
 
 - **New facts**: Appends rows where `event_timestamp > last_watermark`
 - **Dimension changes**: Deletes and re-inserts rows affected by changed dimensions
