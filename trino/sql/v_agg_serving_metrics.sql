@@ -4,15 +4,19 @@ SELECT
     imp.bidder_id,
     db.bidder_name,
     COUNT(*) AS impressions,
-    COUNT(DISTINCT cl.click_id) AS clicks,
+    COALESCE(SUM(cl.click_count), 0) AS clicks,
     SUM(imp.win_price) AS revenue,
     CASE
         WHEN COUNT(*) > 0
-        THEN CAST(COUNT(DISTINCT cl.click_id) AS DOUBLE) / CAST(COUNT(*) AS DOUBLE)
+        THEN CAST(COALESCE(SUM(cl.click_count), 0) AS DOUBLE) / CAST(COUNT(*) AS DOUBLE)
         ELSE 0.0
     END AS ctr
 FROM iceberg.db.impressions imp
-LEFT JOIN iceberg.db.clicks cl
+LEFT JOIN (
+    SELECT impression_id, COUNT(*) AS click_count
+    FROM iceberg.db.clicks
+    GROUP BY impression_id
+) cl
     ON imp.impression_id = cl.impression_id
 LEFT JOIN iceberg.db.dim_bidder db
     ON imp.bidder_id = db.bidder_id AND db.is_current = true

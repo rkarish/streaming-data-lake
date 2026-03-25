@@ -8,8 +8,13 @@ SELECT
     AVG(imp.win_price) AS avg_win_price
 FROM iceberg.db.impressions imp
 LEFT JOIN iceberg.db.bid_requests br ON imp.request_id = br.request_id
-LEFT JOIN iceberg.db.dim_geo dg
-    ON br.device_geo_country = dg.country_code AND dg.is_current = true
+LEFT JOIN (
+    SELECT country_code, MAX(country_name) AS country_name
+    FROM iceberg.db.dim_geo
+    WHERE is_current = true
+    GROUP BY country_code
+) dg
+    ON br.device_geo_country = dg.country_code
 GROUP BY
     date_trunc('hour', imp.event_timestamp),
     br.device_geo_country, dg.country_name;

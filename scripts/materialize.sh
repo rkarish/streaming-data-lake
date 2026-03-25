@@ -46,12 +46,12 @@ MATERIALIZATIONS=(
   "mat_impressions|v_event_enriched_impressions|event_timestamp|impressions|event_timestamp|bidder_id:dim_bidder:bidder_id;creative_id:dim_creative:creative_id"
   "mat_clicks|v_event_enriched_clicks|event_timestamp|clicks|event_timestamp|bidder_id:dim_bidder:bidder_id;creative_id:dim_creative:creative_id"
   "mat_full_funnel|v_event_enriched_full_funnel|request_timestamp|bid_requests|event_timestamp|publisher_id:dim_publisher:publisher_id;seat:dim_bidder:bidder_id;creative_id:dim_creative:creative_id;strategy_id:dim_strategy:strategy_id;line_item_id:dim_line_item:line_item_id;campaign_id:dim_campaign:campaign_id;advertiser_id:dim_advertiser:advertiser_id;agency_id:dim_agency:agency_id;deal_id:dim_deal:deal_id"
-  "mat_agg_metrics_by_bidder|v_agg_metrics_by_bidder|hour_start|impressions|event_timestamp|bidder_id:dim_bidder:bidder_id"
-  "mat_agg_bid_landscape|v_agg_bid_landscape|hour_start|bid_responses|event_timestamp|publisher_id:dim_publisher:publisher_id"
-  "mat_agg_serving_metrics|v_agg_serving_metrics|hour_start|impressions|event_timestamp|bidder_id:dim_bidder:bidder_id"
-  "mat_agg_funnel_by_publisher|v_agg_funnel_by_publisher|hour_start|bid_requests|event_timestamp|publisher_id:dim_publisher:publisher_id"
-  "mat_agg_funnel_leakage|v_agg_funnel_leakage|hour_start|bid_requests|event_timestamp|publisher_id:dim_publisher:publisher_id"
-  "mat_agg_impressions_by_geo|v_agg_impressions_by_geo|hour_start|impressions|event_timestamp|device_geo_country:dim_geo:country_code"
+  "mat_agg_metrics_by_bidder|v_agg_metrics_by_bidder|hour_start|v_agg_metrics_by_bidder|hour_start|bidder_id:dim_bidder:bidder_id"
+  "mat_agg_bid_landscape|v_agg_bid_landscape|hour_start|v_agg_bid_landscape|hour_start|publisher_id:dim_publisher:publisher_id"
+  "mat_agg_serving_metrics|v_agg_serving_metrics|hour_start|v_agg_serving_metrics|hour_start|bidder_id:dim_bidder:bidder_id"
+  "mat_agg_funnel_by_publisher|v_agg_funnel_by_publisher|hour_start|v_agg_funnel_by_publisher|hour_start|publisher_id:dim_publisher:publisher_id"
+  "mat_agg_funnel_leakage|v_agg_funnel_leakage|hour_start|v_agg_funnel_leakage|hour_start|publisher_id:dim_publisher:publisher_id"
+  "mat_agg_impressions_by_geo|v_agg_impressions_by_geo|hour_start|v_agg_impressions_by_geo|hour_start|device_geo_country:dim_geo:country_code"
 )
 
 echo "==> Incremental materialization of dimension-enriched views"
