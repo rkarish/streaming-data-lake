@@ -2008,6 +2008,342 @@ Materialized tables (`mat_*`) are physical Iceberg copies of the views for dashb
 - **Funnel repair boundary effect**: The mock data generator produces all funnel stages synchronously, so the late-event repair pass rarely triggers. In production with independent event sources, the repair pass would catch events split across batch boundaries.
 - **Delete file accumulation**: The dimension change and funnel repair passes produce Iceberg delete files. Run `maintenance.sh` after materialization to compact them.
 
+### Phase 13: Batch Aggregate Tables
+
+#### 13.1 Overview & Motivation
+
+The streaming pipeline produces real-time aggregates via Flink windowed operations (HOP, TUMBLE, FLOOR). These aggregates power live dashboards and alerting but have a fundamental limitation: Flink drops late-arriving events once the internal watermark advances past the window boundary. The current watermark tolerance is 30 seconds (`event_ts - INTERVAL '30' SECOND`), meaning any event arriving more than 30 seconds late is silently discarded.
+
+This creates two problems:
+1. **Backfill gaps**: When historical data is reprocessed through Kafka, the Flink windows may have already closed. The aggregates do not retroactively update.
+2. **No repair path**: Unlike raw fact tables (where late arrivals are simply appended), closed Flink windows are immutable. There is no mechanism to correct an aggregate after the fact.
+
+This phase introduces batch-computed aggregate tables that mirror the same metrics as the Flink aggregates but are computed from raw fact tables via Trino SQL. These serve as the authoritative source for historical reporting, while the Flink aggregates remain the fast path for live monitoring.
+
+#### 13.2 Architecture: Two-Path Aggregation
+
+```
+Live Path (low latency, best-effort accuracy):
+  Kafka → Flink windowed aggs → Iceberg agg table → v_realtime_agg_* view (+ dims) → dashboard
+
+Batch Path (higher latency, full accuracy):
+  Iceberg fact tables → v_agg_* view (agg + dims) → mat_agg_* table → dashboard
+```
+
+**Live path**: Flink streaming aggregates are written continuously. Existing `v_*` views (e.g., `v_realtime_agg_rolling_metrics_by_bidder`) join dimension attributes for dashboard consumption. These views are NOT materialized — they query Flink-produced tables directly.
+
+**Batch path**: New `v_agg_*` views compute the same aggregations from raw fact tables using `date_trunc('hour', event_timestamp)`. These views include both the aggregation logic AND dimension joins in a single view. They are materialized by `scripts/materialize.sh` into `mat_agg_*` tables for query performance.
+
+Key differences from the live path:
+- All batch aggregates use **hourly granularity** uniformly (unlike Flink which uses 1-minute, 5-minute, and hourly windows)
+- Batch aggregates use **standard SQL JOINs** (not Flink interval joins)
+- Batch materialization supports **lookback repair** for late-arriving raw events
+
+#### 13.3 View Naming Conventions
+
+This phase standardizes view naming across the project:
+
+| Prefix | Purpose | Example |
+|---|---|---|
+| `v_event_enriched_*` | Fact tables joined with dimensions, materialized for dashboard performance | `v_event_enriched_bid_requests` |
+| `v_agg_*` | Batch-computed aggregates from fact tables, materialized | `v_agg_metrics_by_bidder` |
+| `v_realtime_agg_*` | Live views over Flink streaming aggregate tables, not materialized | `v_realtime_agg_rolling_metrics_by_bidder` |
+
+The `v_event_enriched_*` and `v_agg_*` views are materialized into `mat_*` tables by `scripts/materialize.sh`. The `v_realtime_agg_*` views are queried directly (not materialized).
+
+**Renamed views** (from Phase 12):
+
+| Old Name | New Name |
+|---|---|
+| `v_bid_requests` | `v_event_enriched_bid_requests` |
+| `v_bid_responses` | `v_event_enriched_bid_responses` |
+| `v_impressions` | `v_event_enriched_impressions` |
+| `v_clicks` | `v_event_enriched_clicks` |
+| `v_full_funnel` | `v_event_enriched_full_funnel` |
+| `v_rolling_metrics_by_bidder` | `v_realtime_agg_rolling_metrics_by_bidder` |
+| `v_bid_landscape_hourly` | `v_realtime_agg_bid_landscape_hourly` |
+| `v_realtime_serving_metrics_1m` | `v_realtime_agg_serving_metrics_1m` |
+| `v_hourly_funnel_by_publisher` | `v_realtime_agg_hourly_funnel_by_publisher` |
+
+#### 13.4 View DDL File Structure
+
+View definitions are broken out from the single `trino/views.sql` file into individual files under `trino/sql/`, organized by category:
+
+```
+trino/sql/
+  v_event_enriched_bid_requests.sql
+  v_event_enriched_bid_responses.sql
+  v_event_enriched_impressions.sql
+  v_event_enriched_clicks.sql
+  v_event_enriched_full_funnel.sql
+  v_realtime_agg_rolling_metrics_by_bidder.sql
+  v_realtime_agg_bid_landscape_hourly.sql
+  v_realtime_agg_serving_metrics_1m.sql
+  v_realtime_agg_hourly_funnel_by_publisher.sql
+  v_agg_metrics_by_bidder.sql
+  v_agg_bid_landscape.sql
+  v_agg_serving_metrics.sql
+  v_agg_funnel_by_publisher.sql
+  v_agg_funnel_leakage.sql
+  v_agg_impressions_by_geo.sql
+```
+
+Each file contains a single `CREATE OR REPLACE VIEW` statement. The `trino/apply_views.sh` script is updated to iterate over `trino/sql/*.sql` files instead of reading from a single `trino/views.sql`.
+
+#### 13.5 Batch Aggregate Views
+
+Six new views in `trino/sql/`, each computing an hourly aggregate from raw fact tables with dimension joins:
+
+| View | Source Facts | Dimension Join | Mirrors Flink Table |
+|---|---|---|---|
+| `v_agg_metrics_by_bidder` | impressions | dim_bidder | rolling_metrics_by_bidder |
+| `v_agg_bid_landscape` | bid_responses + bid_requests | dim_publisher | bid_landscape_hourly |
+| `v_agg_serving_metrics` | impressions + clicks | dim_bidder | realtime_serving_metrics_1m |
+| `v_agg_funnel_by_publisher` | 4-way LEFT JOIN (all fact tables) | dim_publisher | hourly_funnel_by_publisher |
+| `v_agg_funnel_leakage` | 4-way LEFT JOIN (all fact tables) | dim_publisher | funnel_leakage_hourly |
+| `v_agg_impressions_by_geo` | impressions + bid_requests | dim_geo | hourly_impressions_by_geo |
+
+All views use `date_trunc('hour', event_timestamp) AS hour_start` as the time dimension and join dimensions with `is_current = true`.
+
+##### v_agg_metrics_by_bidder
+
+Hourly win metrics by bidder from raw impressions. Mirrors the 5-minute HOP window in `rolling_metrics_by_bidder`.
+
+```sql
+SELECT
+    date_trunc('hour', imp.event_timestamp) AS hour_start,
+    imp.bidder_id,
+    db.bidder_name,
+    db.domain AS bidder_domain,
+    COUNT(*) AS win_count,
+    SUM(imp.win_price) AS revenue,
+    AVG(imp.win_price) AS avg_cpm
+FROM iceberg.db.impressions imp
+LEFT JOIN iceberg.db.dim_bidder db
+    ON imp.bidder_id = db.bidder_id AND db.is_current = true
+GROUP BY
+    date_trunc('hour', imp.event_timestamp),
+    imp.bidder_id, db.bidder_name, db.domain
+```
+
+##### v_agg_bid_landscape
+
+Hourly auction landscape by publisher from bid responses joined to bid requests. Mirrors `bid_landscape_hourly`.
+
+```sql
+SELECT
+    date_trunc('hour', resp.event_timestamp) AS hour_start,
+    br.publisher_id,
+    dp.publisher_name,
+    dp.vertical AS publisher_vertical,
+    COUNT(DISTINCT resp.request_id) AS request_count,
+    COUNT(*) AS total_bids,
+    CASE WHEN COUNT(DISTINCT resp.request_id) > 0
+        THEN CAST(COUNT(*) AS DOUBLE) / CAST(COUNT(DISTINCT resp.request_id) AS DOUBLE)
+        ELSE 0.0
+    END AS bids_per_request,
+    AVG(resp.bid_price) AS avg_bid_price,
+    MAX(resp.bid_price) AS max_bid_price
+FROM iceberg.db.bid_responses resp
+LEFT JOIN iceberg.db.bid_requests br
+    ON resp.request_id = br.request_id
+LEFT JOIN iceberg.db.dim_publisher dp
+    ON br.publisher_id = dp.publisher_id AND dp.is_current = true
+GROUP BY
+    date_trunc('hour', resp.event_timestamp),
+    br.publisher_id, dp.publisher_name, dp.vertical
+```
+
+##### v_agg_serving_metrics
+
+Hourly serving metrics (impressions, clicks, revenue, CTR) by bidder. Mirrors the 1-minute `realtime_serving_metrics_1m`.
+
+```sql
+SELECT
+    date_trunc('hour', imp.event_timestamp) AS hour_start,
+    imp.bidder_id,
+    db.bidder_name,
+    COUNT(*) AS impressions,
+    COUNT(DISTINCT cl.click_id) AS clicks,
+    SUM(imp.win_price) AS revenue,
+    CASE WHEN COUNT(*) > 0
+        THEN CAST(COUNT(DISTINCT cl.click_id) AS DOUBLE) / CAST(COUNT(*) AS DOUBLE)
+        ELSE 0.0
+    END AS ctr
+FROM iceberg.db.impressions imp
+LEFT JOIN iceberg.db.clicks cl
+    ON imp.impression_id = cl.impression_id
+LEFT JOIN iceberg.db.dim_bidder db
+    ON imp.bidder_id = db.bidder_id AND db.is_current = true
+GROUP BY
+    date_trunc('hour', imp.event_timestamp),
+    imp.bidder_id, db.bidder_name
+```
+
+##### v_agg_funnel_by_publisher
+
+Hourly funnel conversion metrics via standard LEFT JOINs across all four fact tables. Mirrors `hourly_funnel_by_publisher` (which uses Flink interval joins).
+
+```sql
+SELECT
+    date_trunc('hour', br.event_timestamp) AS hour_start,
+    br.publisher_id,
+    dp.publisher_name,
+    dp.vertical AS publisher_vertical,
+    dp.tier AS publisher_tier,
+    COUNT(DISTINCT br.request_id) AS bid_requests,
+    COUNT(DISTINCT resp.response_id) AS bid_responses,
+    COUNT(DISTINCT imp.impression_id) AS impressions,
+    COUNT(DISTINCT cl.click_id) AS clicks,
+    CASE WHEN COUNT(DISTINCT br.request_id) > 0
+        THEN CAST(COUNT(DISTINCT resp.response_id) AS DOUBLE)
+            / CAST(COUNT(DISTINCT br.request_id) AS DOUBLE)
+        ELSE 0.0 END AS fill_rate,
+    CASE WHEN COUNT(DISTINCT resp.response_id) > 0
+        THEN CAST(COUNT(DISTINCT imp.impression_id) AS DOUBLE)
+            / CAST(COUNT(DISTINCT resp.response_id) AS DOUBLE)
+        ELSE 0.0 END AS win_rate,
+    CASE WHEN COUNT(DISTINCT imp.impression_id) > 0
+        THEN CAST(COUNT(DISTINCT cl.click_id) AS DOUBLE)
+            / CAST(COUNT(DISTINCT imp.impression_id) AS DOUBLE)
+        ELSE 0.0 END AS ctr
+FROM iceberg.db.bid_requests br
+LEFT JOIN iceberg.db.bid_responses resp ON br.request_id = resp.request_id
+LEFT JOIN iceberg.db.impressions imp ON resp.response_id = imp.response_id
+LEFT JOIN iceberg.db.clicks cl ON imp.impression_id = cl.impression_id
+LEFT JOIN iceberg.db.dim_publisher dp
+    ON br.publisher_id = dp.publisher_id AND dp.is_current = true
+GROUP BY
+    date_trunc('hour', br.event_timestamp),
+    br.publisher_id, dp.publisher_name, dp.vertical, dp.tier
+```
+
+##### v_agg_funnel_leakage
+
+Hourly funnel drop-off metrics. Mirrors `funnel_leakage_hourly`. Uses the same 4-way join as `v_agg_funnel_by_publisher` but computes leakage (drop-off) counts and rates at each stage.
+
+```sql
+SELECT
+    date_trunc('hour', br.event_timestamp) AS hour_start,
+    br.publisher_id,
+    dp.publisher_name,
+    dp.vertical AS publisher_vertical,
+    COUNT(DISTINCT br.request_id) - COUNT(DISTINCT resp.response_id) AS requests_no_response,
+    COUNT(DISTINCT resp.response_id) - COUNT(DISTINCT imp.impression_id) AS responses_no_impression,
+    COUNT(DISTINCT imp.impression_id) - COUNT(DISTINCT cl.click_id) AS impressions_no_click,
+    CASE WHEN COUNT(DISTINCT br.request_id) > 0
+        THEN CAST(COUNT(DISTINCT br.request_id) - COUNT(DISTINCT resp.response_id) AS DOUBLE)
+            / CAST(COUNT(DISTINCT br.request_id) AS DOUBLE)
+        ELSE 0.0 END AS response_leakage_rate,
+    CASE WHEN COUNT(DISTINCT resp.response_id) > 0
+        THEN CAST(COUNT(DISTINCT resp.response_id) - COUNT(DISTINCT imp.impression_id) AS DOUBLE)
+            / CAST(COUNT(DISTINCT resp.response_id) AS DOUBLE)
+        ELSE 0.0 END AS impression_leakage_rate,
+    CASE WHEN COUNT(DISTINCT imp.impression_id) > 0
+        THEN CAST(COUNT(DISTINCT imp.impression_id) - COUNT(DISTINCT cl.click_id) AS DOUBLE)
+            / CAST(COUNT(DISTINCT imp.impression_id) AS DOUBLE)
+        ELSE 0.0 END AS click_leakage_rate
+FROM iceberg.db.bid_requests br
+LEFT JOIN iceberg.db.bid_responses resp ON br.request_id = resp.request_id
+LEFT JOIN iceberg.db.impressions imp ON resp.response_id = imp.response_id
+LEFT JOIN iceberg.db.clicks cl ON imp.impression_id = cl.impression_id
+LEFT JOIN iceberg.db.dim_publisher dp
+    ON br.publisher_id = dp.publisher_id AND dp.is_current = true
+GROUP BY
+    date_trunc('hour', br.event_timestamp),
+    br.publisher_id, dp.publisher_name, dp.vertical
+```
+
+##### v_agg_impressions_by_geo
+
+Hourly impression metrics by country. Mirrors `hourly_impressions_by_geo`. Joins impressions to bid requests for the geo fields.
+
+```sql
+SELECT
+    date_trunc('hour', imp.event_timestamp) AS hour_start,
+    br.device_geo_country,
+    dg.country_name,
+    COUNT(*) AS impression_count,
+    SUM(imp.win_price) AS total_revenue,
+    AVG(imp.win_price) AS avg_win_price
+FROM iceberg.db.impressions imp
+LEFT JOIN iceberg.db.bid_requests br ON imp.request_id = br.request_id
+LEFT JOIN iceberg.db.dim_geo dg
+    ON br.device_geo_country = dg.country_code AND dg.is_current = true
+GROUP BY
+    date_trunc('hour', imp.event_timestamp),
+    br.device_geo_country, dg.country_name
+```
+
+#### 13.6 Materialization Changes
+
+**Removed entries** (Flink aggregate tables no longer materialized):
+- `mat_hourly_funnel_by_publisher`
+- `mat_rolling_metrics_by_bidder`
+- `mat_bid_landscape_hourly`
+- `mat_realtime_serving_metrics_1m`
+
+**Added entries** (batch aggregates, materialized from fact tables):
+
+| mat_table | view | view_ts_col | fact_table | fact_ts_col |
+|---|---|---|---|---|
+| mat_agg_metrics_by_bidder | v_agg_metrics_by_bidder | hour_start | impressions | event_timestamp |
+| mat_agg_bid_landscape | v_agg_bid_landscape | hour_start | bid_responses | event_timestamp |
+| mat_agg_serving_metrics | v_agg_serving_metrics | hour_start | impressions | event_timestamp |
+| mat_agg_funnel_by_publisher | v_agg_funnel_by_publisher | hour_start | bid_requests | event_timestamp |
+| mat_agg_funnel_leakage | v_agg_funnel_leakage | hour_start | bid_requests | event_timestamp |
+| mat_agg_impressions_by_geo | v_agg_impressions_by_geo | hour_start | impressions | event_timestamp |
+
+The key difference from the old Flink entries: `fact_ts_col` is `event_timestamp` (not `window_start`). This means:
+- The watermark tracks the raw fact table's latest event
+- The lookback repair pass (Pass 0) is enabled for late-arriving raw events
+- The `window_start` skip logic in materialize.sh does not apply
+
+No YAML table definitions are needed. Materialized tables are created via CTAS (`CREATE TABLE AS SELECT`) on first run.
+
+#### 13.7 Flink Aggregate Views
+
+Existing views over Flink streaming tables are unchanged and remain available for live queries:
+
+| View | Flink Table | Granularity |
+|---|---|---|
+| `v_realtime_agg_rolling_metrics_by_bidder` | rolling_metrics_by_bidder | 5-minute sliding |
+| `v_realtime_agg_bid_landscape_hourly` | bid_landscape_hourly | Hourly |
+| `v_realtime_agg_serving_metrics_1m` | realtime_serving_metrics_1m | 1-minute |
+| `v_realtime_agg_hourly_funnel_by_publisher` | hourly_funnel_by_publisher | Hourly |
+
+These views join dimension attributes to the Flink-produced tables for dashboard consumption. They are queried directly (not materialized) since Flink tables are small enough for interactive queries.
+
+#### 13.8 Resource Adjustments
+
+Flink job manager CPU requests reduced from 500m to 250m across all three application-mode deployments (ingestion, aggregation, funnel). Job managers are lightweight coordinators that do not need 500m CPU. This frees 750m CPU on the Kubernetes node, ensuring all three task managers (1000m each) can be scheduled on a 10-CPU Docker Desktop allocation.
+
+| Component | Before | After |
+|---|---|---|
+| Job manager CPU (×3) | 500m | 250m |
+| Task manager CPU (×3) | 1000m | 1000m (unchanged) |
+| Total Flink CPU | 4500m | 3750m |
+
+#### 13.9 Considerations
+
+- **Hour-boundary gap**: Since `hour_start = date_trunc('hour', event_timestamp)`, the current hour's bucket timestamp is always earlier than the raw event watermark. Routine incremental runs without lookback will miss in-progress hour buckets. Use `LOOKBACK_HOURS=1` at minimum for batch aggregate materialization.
+- **Multi-table watermark tracking**: For funnel views (`v_agg_funnel_by_publisher`, `v_agg_funnel_leakage`), the watermark tracks `bid_requests.event_timestamp` but the view joins four tables. Late-arriving downstream events (e.g., a click after the watermark advances) are not detected until the next lookback-enabled run. This is acceptable for batch aggregates which are designed for settled data.
+- **Query performance**: Batch aggregate views perform full table scans with multi-way JOINs and GROUP BY. They are meant for materialization, not interactive queries. Use the Flink `v_*` views for live dashboard queries.
+- **Stale Flink materialized tables**: The old `mat_hourly_funnel_by_publisher`, `mat_rolling_metrics_by_bidder`, `mat_bid_landscape_hourly`, and `mat_realtime_serving_metrics_1m` tables are removed from `materialize.sh` and `maintenance.sh`. Any existing tables in Iceberg should be dropped manually after deploying this change.
+
+#### 13.10 Modified Files Summary
+
+| File | Change |
+|---|---|
+| `trino/views.sql` | Removed; replaced by individual files in `trino/sql/` |
+| `trino/sql/*.sql` | New directory with one file per view DDL |
+| `trino/apply_views.sh` | Updated to iterate over `trino/sql/*.sql` |
+| `scripts/materialize.sh` | Rename view refs to `v_event_enriched_*`, remove 4 Flink mat entries, add 6 batch mat entries, skip lookback for Flink aggs |
+| `scripts/maintenance.sh` | Replace 4 stale Flink mat table names with 6 batch agg table names |
+| `k8s/flink/overlays/application-mode/flink-ingestion.yaml` | Job manager CPU 500m → 250m |
+| `k8s/flink/overlays/application-mode/flink-aggregation.yaml` | Job manager CPU 500m → 250m |
+| `k8s/flink/overlays/application-mode/flink-funnel.yaml` | Job manager CPU 500m → 250m |
+
 ### Forward-Looking
 
 The following areas are candidates for future design phases:
