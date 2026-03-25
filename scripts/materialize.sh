@@ -4,6 +4,10 @@ set -euo pipefail
 # =============================================================================
 # Incremental materialization of dimension-enriched views.
 #
+# NOTE: The canonical execution path for this workflow is the Airflow
+# "materialization" DAG. This script is retained as a manual fallback.
+# Do not run concurrently with the Airflow DAG (watermark conflicts).
+#
 # Creates physical Iceberg tables (mat_*) that mirror the Trino views (v_*),
 # pre-joining fact data with SCD Type 2 dimension attributes. Supports:
 #   - Late-arriving data repair within a lookback window (e.g. after backfill)

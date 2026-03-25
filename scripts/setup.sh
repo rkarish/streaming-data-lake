@@ -222,7 +222,8 @@ else
 echo "    - Flink UI:        http://localhost:8081"
 fi
 echo "    - Argo CD UI:      https://localhost:8443 (admin / password)"
-echo "    - Trino:           Query engine ready (http://localhost:8080)"
+echo "    - Trino:           Query engine ready (http://localhost:8082)"
+echo "    - Airflow:         ETL orchestration (http://localhost:8080)"
 echo "    - CloudBeaver:     Web SQL IDE ready (http://localhost:8978)"
 echo "    - Superset:        Dashboards ready (http://localhost:8088)"
 

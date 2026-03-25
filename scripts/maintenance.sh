@@ -3,6 +3,9 @@ set -euo pipefail
 
 # =============================================================================
 # AdTech Data Playground - Table Maintenance
+#
+# NOTE: The canonical execution path for this workflow is the Airflow
+# "maintenance" DAG. This script is retained as a manual fallback.
 # =============================================================================
 # Runs Iceberg table maintenance operations via Trino:
 #   1. Compaction (optimize small files)

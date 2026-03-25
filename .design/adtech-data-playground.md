@@ -2164,14 +2164,18 @@ SELECT
     imp.bidder_id,
     db.bidder_name,
     COUNT(*) AS impressions,
-    COUNT(DISTINCT cl.click_id) AS clicks,
+    COALESCE(SUM(cl.click_count), 0) AS clicks,
     SUM(imp.win_price) AS revenue,
     CASE WHEN COUNT(*) > 0
-        THEN CAST(COUNT(DISTINCT cl.click_id) AS DOUBLE) / CAST(COUNT(*) AS DOUBLE)
+        THEN CAST(COALESCE(SUM(cl.click_count), 0) AS DOUBLE) / CAST(COUNT(*) AS DOUBLE)
         ELSE 0.0
     END AS ctr
 FROM iceberg.db.impressions imp
-LEFT JOIN iceberg.db.clicks cl
+LEFT JOIN (
+    SELECT impression_id, COUNT(*) AS click_count
+    FROM iceberg.db.clicks
+    GROUP BY impression_id
+) cl
     ON imp.impression_id = cl.impression_id
 LEFT JOIN iceberg.db.dim_bidder db
     ON imp.bidder_id = db.bidder_id AND db.is_current = true
@@ -2179,6 +2183,8 @@ GROUP BY
     date_trunc('hour', imp.event_timestamp),
     imp.bidder_id, db.bidder_name
 ```
+
+Note: Clicks are pre-aggregated in a subquery before joining to impressions. A direct LEFT JOIN on `impression_id` would duplicate impression rows when multiple clicks exist for one impression, inflating `COUNT(*)` (impressions) and `SUM(win_price)` (revenue).
 
 ##### v_agg_funnel_by_publisher
 
@@ -2268,12 +2274,19 @@ SELECT
     AVG(imp.win_price) AS avg_win_price
 FROM iceberg.db.impressions imp
 LEFT JOIN iceberg.db.bid_requests br ON imp.request_id = br.request_id
-LEFT JOIN iceberg.db.dim_geo dg
-    ON br.device_geo_country = dg.country_code AND dg.is_current = true
+LEFT JOIN (
+    SELECT country_code, MAX(country_name) AS country_name
+    FROM iceberg.db.dim_geo
+    WHERE is_current = true
+    GROUP BY country_code
+) dg
+    ON br.device_geo_country = dg.country_code
 GROUP BY
     date_trunc('hour', imp.event_timestamp),
     br.device_geo_country, dg.country_name
 ```
+
+Note: `dim_geo` is deduplicated to one row per `country_code` via a subquery. The raw table has multiple current rows per country (one per region), which would inflate counts if joined directly. `MAX(country_name)` is used to satisfy SQL aggregation rules — all rows for a given `country_code` share the same `country_name`.
 
 #### 13.6 Materialization Changes
 
@@ -2287,17 +2300,14 @@ GROUP BY
 
 | mat_table | view | view_ts_col | fact_table | fact_ts_col |
 |---|---|---|---|---|
-| mat_agg_metrics_by_bidder | v_agg_metrics_by_bidder | hour_start | impressions | event_timestamp |
-| mat_agg_bid_landscape | v_agg_bid_landscape | hour_start | bid_responses | event_timestamp |
-| mat_agg_serving_metrics | v_agg_serving_metrics | hour_start | impressions | event_timestamp |
-| mat_agg_funnel_by_publisher | v_agg_funnel_by_publisher | hour_start | bid_requests | event_timestamp |
-| mat_agg_funnel_leakage | v_agg_funnel_leakage | hour_start | bid_requests | event_timestamp |
-| mat_agg_impressions_by_geo | v_agg_impressions_by_geo | hour_start | impressions | event_timestamp |
+| mat_agg_metrics_by_bidder | v_agg_metrics_by_bidder | hour_start | v_agg_metrics_by_bidder | hour_start |
+| mat_agg_bid_landscape | v_agg_bid_landscape | hour_start | v_agg_bid_landscape | hour_start |
+| mat_agg_serving_metrics | v_agg_serving_metrics | hour_start | v_agg_serving_metrics | hour_start |
+| mat_agg_funnel_by_publisher | v_agg_funnel_by_publisher | hour_start | v_agg_funnel_by_publisher | hour_start |
+| mat_agg_funnel_leakage | v_agg_funnel_leakage | hour_start | v_agg_funnel_leakage | hour_start |
+| mat_agg_impressions_by_geo | v_agg_impressions_by_geo | hour_start | v_agg_impressions_by_geo | hour_start |
 
-The key difference from the old Flink entries: `fact_ts_col` is `event_timestamp` (not `window_start`). This means:
-- The watermark tracks the raw fact table's latest event
-- The lookback repair pass (Pass 0) is enabled for late-arriving raw events
-- The `window_start` skip logic in materialize.sh does not apply
+The batch aggregate entries use the **view itself** as the `fact_table` with `hour_start` as `fact_ts_col`. This ensures the watermark and incremental logic compare aggregated rows consistently — using the raw fact table's `event_timestamp` would create a mismatch between the watermark granularity and the view's hourly buckets.
 
 No YAML table definitions are needed. Materialized tables are created via CTAS (`CREATE TABLE AS SELECT`) on first run.
 
@@ -2343,6 +2353,225 @@ Flink job manager CPU requests reduced from 500m to 250m across all three applic
 | `k8s/flink/overlays/application-mode/flink-ingestion.yaml` | Job manager CPU 500m → 250m |
 | `k8s/flink/overlays/application-mode/flink-aggregation.yaml` | Job manager CPU 500m → 250m |
 | `k8s/flink/overlays/application-mode/flink-funnel.yaml` | Job manager CPU 500m → 250m |
+
+### Phase 14: Airflow ETL Orchestration
+
+#### 14.1 Overview & Motivation
+
+The project's SQL orchestration — materialization, table maintenance, and view deployment — is currently implemented as shell scripts (`materialize.sh`, `maintenance.sh`, `apply_views.sh`). While functional, shell scripts lack scheduling, observability, retry semantics, and a web UI for monitoring. This phase migrates all three workflows into Apache Airflow DAGs, adding the project's first batch orchestration layer.
+
+Airflow is the industry standard for batch ETL orchestration in data platforms. For a reference architecture, using proper tooling over ad-hoc scripts demonstrates production readiness.
+
+#### 14.2 Architecture
+
+```
+Airflow (scheduler + webserver + triggerer)
+  |
+  +-- materialization_dag (*/15 * * * *)
+  |     Incremental 4-pass materialization of 11 tables
+  |     Uses TrinoHook + SQLExecuteQueryOperator against Trino
+  |
+  +-- maintenance_dag (@daily)
+  |     Iceberg compaction, snapshot expiry, orphan cleanup (~36 tables)
+  |     Uses SQLExecuteQueryOperator for ALTER TABLE EXECUTE
+  |
+  +-- view_deployment_dag (manual trigger via REST API)
+        Reads trino/sql/*.sql, executes CREATE OR REPLACE VIEW
+        Triggered by CI/CD or deployment scripts
+```
+
+All DAGs connect to Trino at `trino:8080` (internal Docker network) via the `apache-airflow-providers-trino` package. The Trino connection is configured via `AIRFLOW_CONN_TRINO_DEFAULT` environment variable — no Airflow UI setup required.
+
+#### 14.3 Operator Strategy
+
+The DAGs use a hybrid approach with two operator types from the Airflow Trino provider:
+
+| Task Type | Operator | Use Case |
+|---|---|---|
+| Pure SQL (no result needed) | `SQLExecuteQueryOperator` with `do_xcom_push=False` | CREATE TABLE, DELETE, INSERT INTO, ALTER TABLE EXECUTE |
+| SQL + Python logic | `@task` with `TrinoHook` | Read watermark, compare counts, conditional pass execution |
+
+`SQLExecuteQueryOperator` (from `apache-airflow-providers-common-sql`) replaced the deprecated `TrinoOperator`. It works with any Airflow database hook via `conn_id`. `TrinoHook` provides `get_first()`, `get_records()`, and `run()` for direct SQL execution inside `@task`-decorated functions.
+
+This separation maximizes maintainability: simple SQL stays declarative, complex control flow uses Python, and both share the same managed Trino connection.
+
+#### 14.4 Docker Compose Services
+
+Two new services added:
+
+**`airflow-postgres`** — PostgreSQL 16 metadata database for Airflow (follows existing `superset-postgres` pattern).
+
+**`airflow`** — Custom image based on `apache/airflow:2.10-python3.12` with `apache-airflow-providers-trino` and `psycopg2-binary`. Runs `airflow standalone` (webserver + scheduler + triggerer in one process) with LocalExecutor.
+
+| Config | Value |
+|---|---|
+| Host port | 8080 (Trino moves to 8082) |
+| Executor | LocalExecutor |
+| Metadata DB | `postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow` |
+| Admin password | `password` (via `_AIRFLOW_WWW_USER_PASSWORD`) |
+| Trino connection | `AIRFLOW_CONN_TRINO_DEFAULT` env var (JSON format) |
+
+Volumes (all read-only):
+- `./airflow/dags` → `/opt/airflow/dags`
+- `./airflow/plugins` → `/opt/airflow/plugins`
+- `./trino/sql` → `/opt/airflow/trino_sql` (for view deployment DAG)
+
+#### 14.5 Project Structure
+
+```
+airflow/
+  Dockerfile
+  requirements.txt
+  dags/
+    materialization_dag.py
+    maintenance_dag.py
+    view_deployment_dag.py
+  plugins/
+    __init__.py
+    materialization_config.py
+    materialization_runner.py
+    maintenance_config.py
+    view_runner.py
+```
+
+The `plugins/` directory is automatically added to Python's `sys.path` by Airflow, making all config and runner modules importable from DAG files without path manipulation.
+
+#### 14.6 DAG 1: Materialization
+
+**Schedule:** `*/15 * * * *` (every 15 minutes)
+**Max active runs:** 1 (prevents concurrent watermark conflicts)
+**DAG parameter:** `lookback_hours` (integer, default 0)
+
+**Structure:**
+
+```
+ensure_watermark_table (SQLExecuteQueryOperator)
+  |
+  +-- [TaskGroup: mat_bid_requests]       (11 groups in parallel)
+  |     |-- check_or_full_load            (@task)
+  |     |-- pass_0_lookback_repair        (@task)
+  |     |-- pass_1_dimension_repair       (@task)
+  |     |-- pass_2_new_data_append        (@task)
+  |     |-- update_watermark              (SQLExecuteQueryOperator, trigger_rule=all_done)
+  |
+  +-- [TaskGroup: mat_full_funnel]
+        |-- check_or_full_load -> pass_0 -> pass_1 -> pass_2
+        |     -> pass_3_funnel_repair     (@task)
+        |     -> update_watermark
+```
+
+Each pass is a faithful translation of the corresponding shell script logic:
+
+- **check_or_full_load**: Checks if materialized table exists via `information_schema`. If not, performs full CTAS and sets watermark, then raises `AirflowSkipException` to skip remaining passes. Otherwise reads and returns the watermark via XCom.
+- **Pass 0 (Lookback repair)**: If `lookback_hours > 0`, compares fact count vs materialized count in the lookback window. On mismatch, deletes and re-inserts. Skips for entries where `fact_ts_col == "window_start"` (Flink aggregates).
+- **Pass 1 (Dimension repair)**: For each dimension FK, checks if `valid_from > watermark`. If so, deletes and re-inserts affected rows with fresh dimension values.
+- **Pass 2 (New data append)**: Checks for fact rows with `fact_ts_col > watermark` and appends them.
+- **Pass 3 (Funnel repair)**: Only for `mat_full_funnel`. Detects incomplete funnel rows where downstream events (responses, impressions, clicks) arrived after materialization.
+- **update_watermark**: Uses `trigger_rule='all_done'` so the watermark advances even if an intermediate pass fails (matching shell script behavior).
+
+**Configuration (`materialization_config.py`)**: Defines `MaterializationEntry` and `DimCheck` dataclasses — a typed translation of the pipe-delimited `MATERIALIZATIONS` array from `materialize.sh`.
+
+**Runner (`materialization_runner.py`)**: Stateless functions for each pass accepting a `TrinoHook` instance. Called from `@task`-decorated functions in the DAG file.
+
+#### 14.7 DAG 2: Table Maintenance
+
+**Schedule:** `@daily`
+
+**Structure:**
+
+```
+[TaskGroup: bid_requests]       (~36 groups in parallel)
+|   |-- check_exists            (@task)
+|   |-- compact                 (SQLExecuteQueryOperator)
+|   |-- expire_snapshots        (SQLExecuteQueryOperator)
+|   |-- remove_orphan_files     (SQLExecuteQueryOperator)
+```
+
+Each maintenance operation is pure SQL (`ALTER TABLE EXECUTE`), making this an ideal use case for `SQLExecuteQueryOperator` with `do_xcom_push=False`. The only Python logic is the existence check — `check_exists` raises `AirflowSkipException` if the table is not found, cascading to skip the three downstream SQL tasks.
+
+**DAG parameters:** `compact_target` (default `128MB`), `expire_threshold` (default `7d`), `orphan_threshold` (default `7d`).
+
+**Configuration (`maintenance_config.py`)**: A list of ~36 table names matching `maintenance.sh`.
+
+#### 14.8 DAG 3: View Deployment
+
+**Schedule:** `None` (manually triggered)
+
+A single `@task` that reads all `*.sql` files from the mounted `trino/sql/` directory, executes each `CREATE OR REPLACE VIEW` statement via `TrinoHook.run()`, and logs success/failure per view. Raises an exception if any view fails.
+
+**Triggering via REST API:**
+
+```
+POST http://localhost:8080/api/v1/dags/view_deployment/dagRuns
+Authorization: Basic YWRtaW46cGFzc3dvcmQ=
+Content-Type: application/json
+
+{"conf": {}}
+```
+
+This DAG is designed to be called from CI/CD pipelines or deployment scripts after view SQL files change.
+
+#### 14.9 Trino Connection
+
+Configured via environment variable in Docker Compose:
+
+```json
+{
+  "conn_type": "trino",
+  "host": "trino",
+  "port": 8080,
+  "login": "airflow",
+  "schema": "db",
+  "extra": {"catalog": "iceberg", "protocol": "http"}
+}
+```
+
+The `login` is set to `"airflow"` for query attribution in Trino's query log. Trino does not authenticate by default; the user string is informational only.
+
+Both `SQLExecuteQueryOperator` and `TrinoHook` reference `conn_id="trino_default"`, which Airflow resolves from the `AIRFLOW_CONN_TRINO_DEFAULT` environment variable at runtime.
+
+#### 14.10 Shell Script Disposition
+
+The original shell scripts (`materialize.sh`, `maintenance.sh`, `apply_views.sh`) are retained as documented fallbacks. A comment is added at the top of each noting that the canonical execution path is now Airflow and these scripts serve as a manual alternative.
+
+Concurrent execution of the shell scripts while the Airflow DAGs are running is not supported (watermark conflicts).
+
+#### 14.11 Port Reassignment
+
+Airflow takes port 8080 (the standard Airflow webserver port). Trino's host port moves from 8080 to 8082. Internal Docker networking is unchanged — containers still communicate via `trino:8080`.
+
+| Service | Before | After |
+|---|---|---|
+| Trino (host port) | 8080 | 8082 |
+| Airflow (host port) | N/A | 8080 |
+| Trino (container port) | 8080 | 8080 (unchanged) |
+
+#### 14.12 Modified Files Summary
+
+| File | Change |
+|---|---|
+| `docker-compose.yml` | Add `airflow-postgres` and `airflow` services; move Trino host port 8080 → 8082 |
+| `.gitignore` | Add `airflow/logs/` |
+| `scripts/materialize.sh` | Add comment: canonical execution is now Airflow |
+| `scripts/maintenance.sh` | Add comment: canonical execution is now Airflow |
+| `trino/apply_views.sh` | Add comment: canonical execution is now Airflow |
+| `README.md` | Add Airflow section; update Trino URL 8080 → 8082 |
+| `scripts/setup.sh` | Update Trino URL in summary output 8080 → 8082 |
+
+#### 14.13 New Files Summary
+
+| File | Purpose |
+|---|---|
+| `airflow/Dockerfile` | Airflow image with Trino provider |
+| `airflow/requirements.txt` | `apache-airflow-providers-trino`, `psycopg2-binary` |
+| `airflow/dags/materialization_dag.py` | 15-minute materialization DAG |
+| `airflow/dags/maintenance_dag.py` | Daily maintenance DAG |
+| `airflow/dags/view_deployment_dag.py` | Manual view deployment DAG |
+| `airflow/plugins/__init__.py` | Package init |
+| `airflow/plugins/materialization_config.py` | Materialization entry dataclasses |
+| `airflow/plugins/materialization_runner.py` | 4-pass algorithm functions |
+| `airflow/plugins/maintenance_config.py` | Table list for maintenance |
+| `airflow/plugins/view_runner.py` | View SQL file reader and executor |
 
 ### Forward-Looking
 

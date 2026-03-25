@@ -200,7 +200,7 @@ Run the full set of sample analytical queries:
 bash scripts/query-examples.sh
 ```
 
-The Trino Web UI is available at [http://localhost:8080](http://localhost:8080) (no credentials required).
+The Trino Web UI is available at [http://localhost:8082](http://localhost:8082) (no credentials required).
 
 ### 6. Table Maintenance
 
@@ -209,6 +209,27 @@ Run Iceberg table maintenance (compaction, snapshot expiry, orphan cleanup) via 
 ```bash
 bash scripts/maintenance.sh
 ```
+
+### 7. Airflow ETL Orchestration
+
+The materialization, maintenance, and view deployment workflows are orchestrated by Apache Airflow. The Airflow web UI is available at [http://localhost:8080](http://localhost:8080) (admin / password).
+
+| DAG | Schedule | Description |
+|---|---|---|
+| `materialization` | Every 15 min | Incremental 4-pass materialization of 11 tables |
+| `maintenance` | Daily | Iceberg compaction, snapshot expiry, orphan cleanup |
+| `view_deployment` | Manual trigger | Deploy Trino views from `trino/sql/*.sql` |
+
+Trigger the view deployment DAG via REST API:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/dags/view_deployment/dagRuns \
+  -H "Content-Type: application/json" \
+  -u admin:password \
+  -d '{"conf": {}}'
+```
+
+The shell scripts (`materialize.sh`, `maintenance.sh`, `apply_views.sh`) are retained as manual fallbacks but should not be run concurrently with the Airflow DAGs.
 
 ### Quality and Realtime Metrics Tables
 
@@ -593,7 +614,7 @@ Access at [http://localhost:3000](http://localhost:3000).
 
 ### Trino
 
-Access the Trino Web UI at [http://localhost:8080](http://localhost:8080) (no credentials required). Run queries via CLI:
+Access the Trino Web UI at [http://localhost:8082](http://localhost:8082) (no credentials required). Run queries via CLI:
 
 ```bash
 docker exec trino trino --catalog iceberg --schema db

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Apply Trino views from individual SQL files in trino/sql/.
 # Each file contains a single CREATE OR REPLACE VIEW statement.
+#
+# NOTE: The canonical execution path for this workflow is the Airflow
+# "view_deployment" DAG. This script is retained as a manual fallback.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

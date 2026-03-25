@@ -6,6 +6,9 @@ dist/
 build/
 .DS_Store
 
+# Airflow
+airflow/logs/
+
 # Java / Maven
 target/
 *.class

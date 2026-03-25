@@ -128,7 +128,7 @@ services:
     image: trinodb/trino:467
     container_name: trino
     ports:
-      - "8080:8080"
+      - "8082:8080"
     volumes:
       - ./trino/catalog:/etc/trino/catalog
     depends_on:
@@ -200,6 +200,50 @@ services:
       timeout: 5s
       retries: 10
       start_period: 60s
+
+  airflow-postgres:
+    image: postgres:16-alpine
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  airflow:
+    build: ./airflow
+    container_name: airflow
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      trino:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      _AIRFLOW_WWW_USER_PASSWORD: password
+      AIRFLOW_CONN_TRINO_DEFAULT: '{"conn_type":"trino","host":"trino","port":8080,"login":"airflow","schema":"db","extra":{"catalog":"iceberg","protocol":"http"}}'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ./airflow/plugins:/opt/airflow/plugins:ro
+      - ./trino/sql:/opt/airflow/trino_sql:ro
+    command: airflow standalone
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
 
   gitea:
     image: gitea/gitea:1.23
